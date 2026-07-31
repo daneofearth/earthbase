@@ -61,13 +61,31 @@ With Supabase wired up, saving changes the public site immediately — the API
 calls `revalidatePath('/')`, so there is no deploy step. Without it, the file
 store still works locally, which is why a fresh clone with no environment runs.
 
-**`/tune` returns 404 in production unless `TUNE_PASSWORD` is set.** That is
-deliberate. It is the page that decides what the site looks like, its URL is in
-a public repo, and a deploy whose environment had not been filled in yet would
-otherwise be publicly rewritable. Failing closed means that window never exists.
-Local development is always open — no password.
+### Who may tune
 
-See `.env.example` for the three variables and `supabase/migrations/` for the
+Accounts, via Supabase Auth. Sessions are cookies handled entirely server-side —
+no Supabase key of any kind reaches the browser.
+
+Two rules, and the second is the one doing the work:
+
+1. You must be signed in.
+2. Your email must appear in `TUNE_ALLOWED_EMAILS`.
+
+Supabase accepts public sign-ups by default, so without the allowlist "has an
+account" would mean "can rewrite the homepage" for anyone who found the URL —
+and the URL is in a public repo. It is enforced when an account is created *and*
+on every request afterwards, so an account made by some other route still cannot
+tune.
+
+**`/tune` returns 404 in production unless auth is configured.** Deliberate: a
+deploy whose environment had not been filled in yet would otherwise be publicly
+rewritable, and failing closed means that window never exists. With nothing
+configured, local development stays open.
+
+Confirmation emails land on `/auth/confirm`, which must be listed as a Redirect
+URL in the Supabase dashboard.
+
+See `.env.example` for the four variables and `supabase/migrations/` for the
 schema.
 
 Two things about the framing worth knowing before you reach for them:

@@ -22,7 +22,7 @@ import {
   store,
   writePreset,
 } from '@/lib/earthConfigStore'
-import { isUnlocked } from '@/lib/tuneAuth'
+import { canTune } from '@/lib/tuneAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +36,7 @@ function failed(error: unknown) {
 }
 
 export async function GET() {
-  if (!(await isUnlocked())) return LOCKED
+  if (!(await canTune())) return LOCKED
   try {
     return NextResponse.json({
       presets: await listPresets(),
@@ -51,7 +51,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  if (!(await isUnlocked())) return LOCKED
+  if (!(await canTune())) return LOCKED
   try {
     // A malformed body is a bad request, not a server fault.
     const body = (await request.json().catch(() => null)) as {
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  if (!(await isUnlocked())) return LOCKED
+  if (!(await canTune())) return LOCKED
   try {
     const slug = new URL(request.url).searchParams.get('slug') ?? ''
     const wasActive = (await getActiveSlug()) === slug

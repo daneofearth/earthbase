@@ -21,12 +21,15 @@ export default function Tuner({
   activeSlug: initialActive,
   backend,
   writable,
+  email,
 }: {
   initial: EarthConfig
   presets: Preset[]
   activeSlug: string | null
   backend: 'file' | 'supabase'
   writable: boolean
+  /** null when running locally with no auth configured. */
+  email: string | null
 }) {
   // Where a save actually lands changes what the screen can honestly promise,
   // so the copy is derived rather than written for one of the two cases.
@@ -261,6 +264,25 @@ export default function Tuner({
                 ? 'Saving changes the public site straight away. No deploy needed.'
                 : 'Saving writes files on this machine only. The public site changes when those files are committed and deployed.'}
           </p>
+
+          {email && (
+            <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-3">
+              <span className="truncate text-xs text-white/40">{email}</span>
+              <button
+                onClick={async () => {
+                  await fetch('/api/auth', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ action: 'signout' }),
+                  })
+                  window.location.assign('/tune')
+                }}
+                className="shrink-0 text-xs text-white/45 underline-offset-2 hover:text-white hover:underline"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
         </aside>
       </div>
 

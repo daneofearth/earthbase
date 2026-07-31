@@ -9,12 +9,12 @@
 import { NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { getActiveSlug, NotWritableError, setActiveSlug } from '@/lib/earthConfigStore'
-import { isUnlocked } from '@/lib/tuneAuth'
+import { canTune } from '@/lib/tuneAccess'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request) {
-  if (!(await isUnlocked())) {
+  if (!(await canTune())) {
     return NextResponse.json({ error: 'Locked.' }, { status: 401 })
   }
 
