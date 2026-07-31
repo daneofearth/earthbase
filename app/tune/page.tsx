@@ -1,21 +1,31 @@
 /**
- * The tuner is a local development tool, not part of the site.
+ * The tuning screen.
  *
- * It 404s anywhere else, because its whole purpose is writing files and the
- * deployed filesystem is read-only — a tuner on the live site would present
- * controls whose Save button could never work.
+ * Three outcomes, in order:
+ *   - no TUNE_PASSWORD in production → 404, the page does not exist
+ *   - password set but no session    → the unlock form
+ *   - development, or unlocked       → the tuner
+ *
+ * The 404 is deliberate. Without it, a deploy that had not had its environment
+ * filled in yet would put a working Save button on a public URL.
  */
 
 import { notFound } from 'next/navigation'
-import { getActiveConfig, getActiveSlug, isWritable, listPresets } from '@/lib/earthConfigStore'
+import { getActiveConfig, getActiveSlug, isWritable, listPresets, store } from '@/lib/earthConfigStore'
+import { isUnlocked, tunerEnabled } from '@/lib/tuneAuth'
 import Tuner from './Tuner'
+import Unlock from './Unlock'
 
 export const dynamic = 'force-dynamic'
 
-export const metadata = { title: 'Tune the globe' }
+export const metadata = {
+  title: 'Tune the globe',
+  robots: { index: false, follow: false },
+}
 
 export default async function TunePage() {
-  if (!isWritable()) notFound()
+  if (!tunerEnabled()) notFound()
+  if (!(await isUnlocked())) return <Unlock />
 
   // Read here rather than fetched from the client on mount: the list arrives
   // with the page instead of popping in a moment later, and the tuner is left
@@ -25,6 +35,8 @@ export default async function TunePage() {
       initial={await getActiveConfig()}
       presets={await listPresets()}
       activeSlug={await getActiveSlug()}
+      backend={store().kind}
+      writable={isWritable()}
     />
   )
 }

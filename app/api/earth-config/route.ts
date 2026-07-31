@@ -1,12 +1,16 @@
 /**
  * Preset storage for the tuner.
  *
- * GET is harmless anywhere. POST and DELETE write files and therefore only work
- * locally — the store refuses in any other environment rather than failing
- * confusingly against a read-only filesystem.
+ * Every method is behind the same lock as the tuner page itself — this is the
+ * endpoint that decides what the public site looks like, so an unlocked GET
+ * would leak it and an unlocked POST would let anyone rewrite the homepage.
+ *
+ * Writes revalidate `/`, so a preset change reaches visitors immediately
+ * instead of waiting for the next deploy or cache expiry.
  */
 
 import { NextResponse } from 'next/server'
+import { revalidatePath } from 'next/cache'
 import { resolveConfig, slugify } from '@/lib/earthConfig'
 import {
   deletePreset,
@@ -15,25 +19,47 @@ import {
   isWritable,
   listPresets,
   NotWritableError,
+  store,
   writePreset,
 } from '@/lib/earthConfigStore'
+import { isUnlocked } from '@/lib/tuneAuth'
 
 export const dynamic = 'force-dynamic'
 
+const LOCKED = NextResponse.json({ error: 'Locked.' }, { status: 401 })
+
+function failed(error: unknown) {
+  if (error instanceof NotWritableError) {
+    return NextResponse.json({ error: error.message }, { status: 403 })
+  }
+  return NextResponse.json({ error: (error as Error).message }, { status: 400 })
+}
+
 export async function GET() {
-  return NextResponse.json({
-    presets: await listPresets(),
-    activeSlug: await getActiveSlug(),
-    active: await getActiveConfig(),
-    writable: isWritable(),
-  })
+  if (!(await isUnlocked())) return LOCKED
+  try {
+    return NextResponse.json({
+      presets: await listPresets(),
+      activeSlug: await getActiveSlug(),
+      active: await getActiveConfig(),
+      writable: isWritable(),
+      backend: store().kind,
+    })
+  } catch (error) {
+    return failed(error)
+  }
 }
 
 export async function POST(request: Request) {
+  if (!(await isUnlocked())) return LOCKED
   try {
-    const body = (await request.json()) as { name?: unknown; values?: unknown }
+    // A malformed body is a bad request, not a server fault.
+    const body = (await request.json().catch(() => null)) as {
+      name?: unknown
+      values?: unknown
+    } | null
 
-    const name = typeof body.name === 'string' ? body.name.trim() : ''
+    const name = typeof body?.name === 'string' ? body.name.trim() : ''
     if (!name) {
       return NextResponse.json({ error: 'Give the preset a name.' }, { status: 400 })
     }
@@ -46,28 +72,31 @@ export async function POST(request: Request) {
       )
     }
 
-    const saved = await writePreset(name, resolveConfig(body.values), slug, new Date().toISOString())
+    const saved = await writePreset(slug, name, resolveConfig(body?.values), new Date().toISOString())
+
+    // Saving over the preset that is currently live changes the public page.
+    if ((await getActiveSlug()) === slug) revalidatePath('/')
+
     return NextResponse.json({ saved, presets: await listPresets() })
   } catch (error) {
-    if (error instanceof NotWritableError) {
-      return NextResponse.json({ error: error.message }, { status: 403 })
-    }
-    return NextResponse.json({ error: (error as Error).message }, { status: 400 })
+    return failed(error)
   }
 }
 
 export async function DELETE(request: Request) {
+  if (!(await isUnlocked())) return LOCKED
   try {
     const slug = new URL(request.url).searchParams.get('slug') ?? ''
+    const wasActive = (await getActiveSlug()) === slug
+
     await deletePreset(slug)
+    if (wasActive) revalidatePath('/')
+
     return NextResponse.json({
       presets: await listPresets(),
       activeSlug: await getActiveSlug(),
     })
   } catch (error) {
-    if (error instanceof NotWritableError) {
-      return NextResponse.json({ error: error.message }, { status: 403 })
-    }
-    return NextResponse.json({ error: (error as Error).message }, { status: 400 })
+    return failed(error)
   }
 }

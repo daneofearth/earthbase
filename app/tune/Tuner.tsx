@@ -19,11 +19,18 @@ export default function Tuner({
   initial,
   presets: initialPresets,
   activeSlug: initialActive,
+  backend,
+  writable,
 }: {
   initial: EarthConfig
   presets: Preset[]
   activeSlug: string | null
+  backend: 'file' | 'supabase'
+  writable: boolean
 }) {
+  // Where a save actually lands changes what the screen can honestly promise,
+  // so the copy is derived rather than written for one of the two cases.
+  const live = backend === 'supabase'
   const [values, setValues] = useState<EarthConfig>(initial)
   // Seeded from the server; every later change comes back in a mutation
   // response, so there is no fetch-on-mount and no empty first paint.
@@ -66,7 +73,9 @@ export default function Tuner({
     setActiveSlug(data.activeSlug)
     setStatus(
       slug
-        ? 'Marked as the live look. It reaches the real site on the next commit + deploy.'
+        ? live
+          ? 'Live now. Reload the home page to see it.'
+          : 'Marked as the live look. It reaches the real site on the next commit + deploy.'
         : 'Cleared — the site falls back to the built-in defaults.',
     )
   }
@@ -151,7 +160,13 @@ export default function Tuner({
           <header className="border-b border-white/10 px-4 py-3">
             <h1 className="text-sm font-semibold">Saved looks</h1>
             <p className="mt-1 text-xs text-white/50">
-              Written to <code className="text-white/70">config/earth/</code> as text files.
+              {live ? (
+                'Stored in Supabase.'
+              ) : (
+                <>
+                  Written to <code className="text-white/70">config/earth/</code> as text files.
+                </>
+              )}
             </p>
           </header>
 
@@ -240,8 +255,11 @@ export default function Tuner({
           )}
 
           <p className="border-t border-white/10 px-4 py-3 text-xs leading-relaxed text-white/40">
-            Saving writes files on this machine only. The public site changes
-            when those files are committed and deployed.
+            {!writable
+              ? 'Read-only here — nothing can be saved.'
+              : live
+                ? 'Saving changes the public site straight away. No deploy needed.'
+                : 'Saving writes files on this machine only. The public site changes when those files are committed and deployed.'}
           </p>
         </aside>
       </div>

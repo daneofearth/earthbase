@@ -48,9 +48,27 @@ file is the shape of a saved preset, the defaults, and the list of sliders.
 Adding a knob is one entry in `PARAMS` plus one line in `DEFAULTS`; the control
 appears on its own.
 
-**The tuner only runs locally, and it 404s in production.** Saving writes files,
-and Vercel's filesystem is read-only — a Save button on the live site could
-never work, so the page refuses to exist there rather than lying about it.
+### Where presets are stored, and who may change them
+
+Two backends, chosen automatically:
+
+| | Storage | Saving works | `/tune` |
+|---|---|---|---|
+| Supabase configured | `earth_presets` table | yes, anywhere | password required |
+| not configured | JSON in `config/earth/` | local dev only | open in dev, 404 in prod |
+
+With Supabase wired up, saving changes the public site immediately — the API
+calls `revalidatePath('/')`, so there is no deploy step. Without it, the file
+store still works locally, which is why a fresh clone with no environment runs.
+
+**`/tune` returns 404 in production unless `TUNE_PASSWORD` is set.** That is
+deliberate. It is the page that decides what the site looks like, its URL is in
+a public repo, and a deploy whose environment had not been filled in yet would
+otherwise be publicly rewritable. Failing closed means that window never exists.
+Local development is always open — no password.
+
+See `.env.example` for the three variables and `supabase/migrations/` for the
+schema.
 
 Two things about the framing worth knowing before you reach for them:
 
@@ -66,15 +84,17 @@ still frame shown during load will be of the old planet.
 
 ### How a saved look reaches the live site
 
-1. Tune, name it, **Save** → writes `config/earth/<name>.json`.
-2. **Use this on the site** → writes `config/earth/_active.json`.
-3. Commit both and push. The home page reads the active preset at build time,
-   so the deploy is what actually changes what visitors see.
+Tune it, name it, **Save**, then **Use this on the site**. With Supabase that is
+the whole procedure — the home page updates on the next load. On the file
+backend you also have to commit `config/earth/` and push.
 
-Presets are plain JSON and safe to hand-edit or diff. They are also treated as
-untrusted on read: unknown keys are dropped and numbers are clamped into range,
-so an old or mangled file falls back to sane values instead of shipping a broken
-globe. With nothing marked active, the site uses the built-in defaults.
+Presets are treated as untrusted whenever they are read back, from either
+backend: unknown keys dropped, numbers clamped into range. A preset saved
+before a parameter existed, or a row edited by hand into nonsense, falls back to
+sane values instead of putting a broken globe on the live site. With nothing
+marked active, the site uses the built-in defaults — and it also falls back to
+them if Supabase is unreachable, so a database outage costs the site its custom
+look rather than its homepage.
 
 ## Textures
 

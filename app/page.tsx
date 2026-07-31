@@ -1,8 +1,12 @@
 import EarthBackground from "@/components/earth/EarthBackground";
 import { getActiveConfig } from "@/lib/earthConfigStore";
 
-// Read at build time. The saved preset is baked into the static page, so the
-// live site costs nothing at request time for this.
+// Cached and served statically, but not frozen at build time: the tuner calls
+// revalidatePath('/') whenever the active preset changes, so a save is live
+// immediately. The interval is only a backstop for changes made outside the
+// app — editing a row in Supabase directly, say.
+export const revalidate = 300;
+
 export default async function Home() {
   const config = await getActiveConfig();
 
