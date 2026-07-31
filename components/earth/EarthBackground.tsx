@@ -24,7 +24,8 @@
  */
 
 import dynamic from 'next/dynamic'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
 
 const EarthScene = dynamic(() => import('./EarthScene'), {
   ssr: false,
@@ -34,30 +35,25 @@ const EarthScene = dynamic(() => import('./EarthScene'), {
 export type EarthBackgroundProps = {
   className?: string
   posterSrc?: string
-  dayMap?: string
-  cloudMap?: string | null
-  rotationPeriod?: number
-  cloudPeriod?: number
-  showStars?: boolean
-  /** Dark scrim over the whole thing so foreground text stays readable. 0–1. */
-  overlayOpacity?: number
+  /**
+   * Any subset of the knobs; the rest fall back to the defaults. Comes from the
+   * active saved preset on the live page, and from the sliders in the tuner.
+   */
+  config?: Partial<EarthConfig>
 }
 
 export default function EarthBackground({
   className = '',
   posterSrc = '/textures/earth-poster.jpg',
-  dayMap,
-  cloudMap,
-  rotationPeriod = 120,
-  cloudPeriod = 90,
-  showStars = true,
-  overlayOpacity = 0.45,
+  config,
 }: EarthBackgroundProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
   const [onScreen, setOnScreen] = useState(true)
   const [tabVisible, setTabVisible] = useState(true)
   const [ready, setReady] = useState(false)
+
+  const resolved = useMemo(() => resolveConfig(config), [config])
 
   /* --- prefers-reduced-motion ------------------------------------------ */
   useEffect(() => {
@@ -114,22 +110,17 @@ export default function EarthBackground({
           className="absolute inset-0 transition-opacity duration-1000"
           style={{ opacity: ready ? 1 : 0 }}
         >
-          <EarthScene
-            dayMap={dayMap}
-            cloudMap={cloudMap}
-            rotationPeriod={rotationPeriod}
-            cloudPeriod={cloudPeriod}
-            showStars={showStars}
-            active={active}
-            onReady={handleReady}
-          />
+          <EarthScene config={resolved} active={active} onReady={handleReady} />
         </div>
       )}
 
-      {overlayOpacity > 0 && (
+      {resolved.scrimOpacity > 0 && (
         <div
           className="absolute inset-0"
-          style={{ backgroundColor: `rgba(0,0,0,${overlayOpacity})` }}
+          style={{
+            backgroundColor: resolved.scrimColor,
+            opacity: resolved.scrimOpacity,
+          }}
         />
       )}
     </div>

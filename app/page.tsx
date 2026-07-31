@@ -1,11 +1,16 @@
 import EarthBackground from "@/components/earth/EarthBackground";
+import { getActiveConfig } from "@/lib/earthConfigStore";
 
-export default function Home() {
+// Read at build time. The saved preset is baked into the static page, so the
+// live site costs nothing at request time for this.
+export default async function Home() {
+  const config = await getActiveConfig();
+
   return (
     // `relative` matters: EarthBackground is absolutely positioned, so without
     // a positioned ancestor it escapes and pins itself to the body instead.
     <section className="relative flex min-h-screen flex-1 items-center justify-center overflow-hidden px-6">
-      <EarthBackground rotationPeriod={140} overlayOpacity={0.5} />
+      <EarthBackground config={config} />
 
       {/* z-10 keeps the copy in front of the globe. */}
       <div className="relative z-10 text-center">

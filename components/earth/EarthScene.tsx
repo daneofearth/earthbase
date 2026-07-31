@@ -9,24 +9,44 @@
  *
  * Everything here is real-time, so there is no loop point to get wrong. The
  * globe just keeps turning.
+ *
+ * Every visual value comes in as an EarthConfig — see lib/earthConfig.ts. There
+ * are no magic numbers left in this file on purpose: the tuner at /tune edits
+ * that config, so anything hardcoded here is a knob nobody can reach.
  */
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Preload, Stars, useTexture } from '@react-three/drei'
-import { Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import { PerspectiveCamera, Preload, Stars, useTexture } from '@react-three/drei'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
+import type { EarthConfig } from '@/lib/earthConfig'
 
-const AXIAL_TILT = THREE.MathUtils.degToRad(23.4)
+const DEG = THREE.MathUtils.degToRad
 
-// One source of truth for the sun. The directional light and the atmosphere
-// shader both read it — if they drift apart, the glow lights a different
-// hemisphere than the terrain and the planet looks subtly wrong in a way that
-// is very hard to trace back.
-const SUN_POSITION: [number, number, number] = [5, 2, 4]
+/** Compass angle + height, which people can picture, into a direction vector. */
+function sunVector(azimuthDeg: number, elevationDeg: number): THREE.Vector3 {
+  const az = DEG(azimuthDeg)
+  const el = DEG(elevationDeg)
+  return new THREE.Vector3(
+    Math.cos(el) * Math.sin(az),
+    Math.sin(el),
+    Math.cos(el) * Math.cos(az),
+  ).normalize()
+}
 
 /* ------------------------------------------------------------------ Earth */
 
-function Earth({ map, period }: { map: string; period: number }) {
+function Earth({
+  map,
+  period,
+  reverse,
+  startLongitude,
+}: {
+  map: string
+  period: number
+  reverse: boolean
+  startLongitude: number
+}) {
   const ref = useRef<THREE.Mesh>(null!)
 
   // Configured through useTexture's own onLoad rather than by mutating the
@@ -42,10 +62,15 @@ function Earth({ map, period }: { map: string; period: number }) {
 
   const texture = useTexture(map, configure)
 
+  useEffect(() => {
+    ref.current.rotation.y = DEG(startLongitude)
+  }, [startLongitude])
+
   // `delta` is seconds since the last frame, so the spin rate is identical
   // on a 60Hz laptop and a 144Hz monitor. Never increment by a fixed number.
   useFrame((_, delta) => {
-    ref.current.rotation.y += (delta * Math.PI * 2) / period
+    if (period <= 0) return
+    ref.current.rotation.y += ((reverse ? -1 : 1) * delta * Math.PI * 2) / period
   })
 
   return (
@@ -58,7 +83,21 @@ function Earth({ map, period }: { map: string; period: number }) {
 
 /* ----------------------------------------------------------------- Clouds */
 
-function Clouds({ map, period }: { map: string; period: number }) {
+function Clouds({
+  map,
+  period,
+  reverse,
+  startLongitude,
+  opacity,
+  altitude,
+}: {
+  map: string
+  period: number
+  reverse: boolean
+  startLongitude: number
+  opacity: number
+  altitude: number
+}) {
   const ref = useRef<THREE.Mesh>(null!)
 
   const configure = useCallback((t: THREE.Texture) => {
@@ -71,18 +110,23 @@ function Clouds({ map, period }: { map: string; period: number }) {
 
   const texture = useTexture(map, configure)
 
+  useEffect(() => {
+    ref.current.rotation.y = DEG(startLongitude)
+  }, [startLongitude])
+
   useFrame((_, delta) => {
-    ref.current.rotation.y += (delta * Math.PI * 2) / period
+    if (period <= 0) return
+    ref.current.rotation.y += ((reverse ? -1 : 1) * delta * Math.PI * 2) / period
   })
 
   return (
-    <mesh ref={ref} scale={1.012}>
+    <mesh ref={ref} scale={altitude}>
       <sphereGeometry args={[1, 96, 64]} />
       <meshStandardMaterial
         map={texture}
         alphaMap={texture}
         transparent
-        opacity={0.75}
+        opacity={opacity}
         depthWrite={false}
         roughness={1}
         metalness={0}
@@ -132,28 +176,34 @@ const atmosphereFragment = /* glsl */ `
   }
 `
 
-// The shell's radius decides how far the glow can reach past the surface. The
-// fresnel term peaks at the shell's own silhouette and is hard-cut to nothing
-// outside it, so a wide shell (the original 1.16) puts a crisp edge well off
-// the planet and reads as a detached hoop. Keeping it tight holds the glow on
-// the limb, where the eye expects it.
-const ATMOSPHERE_SCALE = 1.05
-const ATMOSPHERE_POWER = 2.2
-const ATMOSPHERE_INTENSITY = 1.15
-
-function Atmosphere({ color = '#4a9eff' }: { color?: string }) {
+function Atmosphere({
+  color,
+  reach,
+  tightness,
+  brightness,
+  sunDir,
+}: {
+  color: string
+  reach: number
+  tightness: number
+  brightness: number
+  sunDir: THREE.Vector3
+}) {
+  // Rebuilt rather than mutated when a value changes. Tuning is rare and the
+  // shader program itself is unaffected, so recreating the uniforms object is
+  // cheaper than it looks and avoids writing into a hook's return value.
   const uniforms = useMemo(
     () => ({
       uColor: { value: new THREE.Color(color) },
-      uPower: { value: ATMOSPHERE_POWER },
-      uIntensity: { value: ATMOSPHERE_INTENSITY },
-      uSunDir: { value: new THREE.Vector3(...SUN_POSITION).normalize() },
+      uPower: { value: tightness },
+      uIntensity: { value: brightness },
+      uSunDir: { value: sunDir },
     }),
-    [color],
+    [color, tightness, brightness, sunDir],
   )
 
   return (
-    <mesh scale={ATMOSPHERE_SCALE}>
+    <mesh scale={reach}>
       <sphereGeometry args={[1, 64, 48]} />
       <shaderMaterial
         vertexShader={atmosphereVertex}
@@ -171,26 +221,36 @@ function Atmosphere({ color = '#4a9eff' }: { color?: string }) {
 /* --------------------------------------------------------- camera framing */
 
 /**
- * Frames the globe against whichever viewport dimension is smaller.
+ * How much of the screen the globe covers, and where it sits.
  *
- * A fixed camera distance only ever looks right at one aspect ratio. Tuned for
+ * A fixed camera distance only ever looks right at one aspect ratio — tuned for
  * a landscape window, a portrait phone crops the sphere off every edge and the
- * background stops reading as a planet at all — it becomes a blue wall. This
- * solves for the distance that fits a unit-radius sphere in view, then applies
- * the horizontal constraint too once the viewport goes portrait.
+ * background stops reading as a planet at all. So the distance is solved for
+ * instead, against whichever viewport dimension is smaller.
+ *
+ * Note what this means for `lens`: distance is derived *from* the field of
+ * view, so the two cancel and the globe's on-screen size depends only on
+ * `globeSize`. Widening the lens changes how much the sphere bulges toward the
+ * viewer, not how big it is.
+ *
+ * Returns the visible half-extents in world units, which is what lets the
+ * offsets be expressed as a fraction of the screen rather than in scene units
+ * that would drift every time the size changed, plus the camera distance the
+ * scene renders declaratively.
  */
-function FitCamera({ margin = 1.4 }: { margin?: number }) {
-  const { camera, size } = useThree()
+function useViewport(globeSize: number, lens: number) {
+  const size = useThree((state) => state.size)
+  const aspect = size.width / size.height
 
-  useEffect(() => {
-    const cam = camera as THREE.PerspectiveCamera
-    const halfFov = THREE.MathUtils.degToRad(cam.fov) / 2
-    const aspect = size.width / size.height
-    cam.position.setZ(margin / (Math.tan(halfFov) * Math.min(1, aspect)))
-    cam.updateProjectionMatrix()
-  }, [camera, size, margin])
+  // Half-height in world units. The globe has radius 1, so a half-height of
+  // 1/globeSize makes the diameter cover exactly `globeSize` of the short edge.
+  const halfHeight = 1 / (globeSize * Math.min(1, aspect))
 
-  return null
+  return {
+    halfHeight,
+    halfWidth: halfHeight * aspect,
+    distance: halfHeight / Math.tan(DEG(lens) / 2),
+  }
 }
 
 /* ------------------------------------------------------- load-complete ping */
@@ -204,41 +264,107 @@ function ReadySignal({ onReady }: { onReady?: () => void }) {
 
 /* ------------------------------------------------------------------ Scene */
 
-export type EarthSceneProps = {
-  dayMap?: string
-  cloudMap?: string | null
-  /** Seconds for one full rotation. 120 is a slow, calm drift. */
-  rotationPeriod?: number
-  /** Clouds turn slightly faster for parallax. */
-  cloudPeriod?: number
-  /** false = stop rendering entirely (tab hidden, scrolled away). */
-  active?: boolean
-  showStars?: boolean
-  onReady?: () => void
+function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () => void }) {
+  const { halfWidth, halfHeight, distance } = useViewport(config.globeSize, config.lens)
+  const sunDir = useMemo(
+    () => sunVector(config.sunAzimuth, config.sunElevation),
+    [config.sunAzimuth, config.sunElevation],
+  )
+  const sunPos = useMemo(() => sunDir.clone().multiplyScalar(10), [sunDir])
+
+  const dayMap = useDayMap()
+  const cloudPeriod =
+    config.cloudSpeedRatio > 0 ? config.rotationPeriod / config.cloudSpeedRatio : 0
+
+  return (
+    <>
+      {/* Declared rather than mutated after the fact, so fov and distance stay
+          derived from the config instead of drifting out of sync with it. */}
+      <PerspectiveCamera makeDefault fov={config.lens} position={[0, 0, distance]} />
+
+      <ambientLight intensity={config.nightFill} />
+      <directionalLight position={sunPos} intensity={config.sunIntensity} />
+
+      {config.starsEnabled && config.starCount > 0 && (
+        // `key` because drei builds the star field once from these values;
+        // without it, dragging the count slider does nothing visible.
+        <Stars
+          key={`${config.starCount}-${config.starSize}`}
+          radius={80}
+          depth={40}
+          count={config.starCount}
+          factor={config.starSize}
+          fade
+          speed={0}
+        />
+      )}
+
+      <Suspense fallback={null}>
+        <group
+          position={[config.offsetX * halfWidth, config.offsetY * halfHeight, 0]}
+          rotation={[DEG(config.nod), 0, DEG(config.tilt)]}
+        >
+          <Earth
+            map={dayMap}
+            period={config.rotationPeriod}
+            reverse={config.reverse}
+            startLongitude={config.startLongitude}
+          />
+          {config.cloudsEnabled && (
+            <Clouds
+              map="/textures/earth-clouds.jpg"
+              period={cloudPeriod}
+              reverse={config.reverse}
+              startLongitude={config.startLongitude}
+              opacity={config.cloudOpacity}
+              altitude={config.cloudAltitude}
+            />
+          )}
+          <Atmosphere
+            color={config.atmosphereColor}
+            reach={config.atmosphereReach}
+            tightness={config.atmosphereTightness}
+            brightness={config.atmosphereBrightness}
+            sunDir={sunDir}
+          />
+        </group>
+        <Preload all />
+        <ReadySignal onReady={onReady} />
+      </Suspense>
+    </>
+  )
 }
 
 /**
- * Picks the day map before the first render rather than swapping it later.
+ * Picks the day map once, on the first render, rather than swapping it later.
  *
  * This file only ever executes in the browser — EarthBackground pulls it in
- * with ssr:false — so reading `window` here is safe, and it matters that the
- * choice is made *now*: deciding in an effect would load the big texture, then
- * throw it away and load the small one, which is worse than either.
+ * with ssr:false — so reading `window` is safe, and it matters that the choice
+ * is made *now*: deciding in an effect would load the big texture, then throw
+ * it away and load the small one, which is worse than either.
+ *
+ * The saving is not bandwidth, it is VRAM. On the GPU the 4096x2048 map is not
+ * its 0.6MB of JPEG, it is ~33MB of raw pixels plus mipmaps.
  */
-function pickDayMap() {
-  if (typeof window === 'undefined') return '/textures/earth-day.jpg'
-  return window.innerWidth > 900 ? '/textures/earth-day.jpg' : '/textures/earth-day-2k.jpg'
+function useDayMap() {
+  // Lazy initial state, so this is evaluated once for the life of the scene.
+  // Recomputing per render would swap the texture mid-session on a resize.
+  const [map] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth <= 900
+      ? '/textures/earth-day-2k.jpg'
+      : '/textures/earth-day.jpg',
+  )
+  return map
 }
 
-export default function EarthScene({
-  dayMap = pickDayMap(),
-  cloudMap = '/textures/earth-clouds.jpg',
-  rotationPeriod = 120,
-  cloudPeriod = 90,
-  active = true,
-  showStars = true,
-  onReady,
-}: EarthSceneProps) {
+export type EarthSceneProps = {
+  config: EarthConfig
+  /** false = stop rendering entirely (tab hidden, scrolled away). */
+  active?: boolean
+  onReady?: () => void
+}
+
+export default function EarthScene({ config, active = true, onReady }: EarthSceneProps) {
   return (
     <Canvas
       // "never" halts the render loop without tearing down the WebGL context,
@@ -247,29 +373,11 @@ export default function EarthScene({
       // Cap pixel ratio. A background does not need full retina, and this is
       // the single biggest performance lever on a 3x phone display.
       dpr={[1, 1.5]}
-      // Only the initial pose — FitCamera derives the distance from the
-      // viewport on mount and on every resize. `fov` is the knob to turn if you
-      // want the globe bigger or smaller; distance is no longer yours to set.
-      camera={{ position: [0, 0, 3.3], fov: 42 }}
+      // No `camera` prop: SceneContents declares a PerspectiveCamera with
+      // makeDefault, so fov and distance come from the config in one place.
       gl={{ antialias: true, powerPreference: 'high-performance', alpha: true }}
     >
-      <FitCamera />
-      <ambientLight intensity={0.08} />
-      <directionalLight position={SUN_POSITION} intensity={2.4} />
-
-      {showStars && (
-        <Stars radius={80} depth={40} count={2500} factor={3} fade speed={0} />
-      )}
-
-      <Suspense fallback={null}>
-        <group rotation={[0, 0, AXIAL_TILT]}>
-          <Earth map={dayMap} period={rotationPeriod} />
-          {cloudMap && <Clouds map={cloudMap} period={cloudPeriod} />}
-          <Atmosphere />
-        </group>
-        <Preload all />
-        <ReadySignal onReady={onReady} />
-      </Suspense>
+      <SceneContents config={config} onReady={onReady} />
     </Canvas>
   )
 }

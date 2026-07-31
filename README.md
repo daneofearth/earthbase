@@ -37,20 +37,44 @@ canvas instead of sitting behind it forever, and textures are configured through
 
 ## Tuning the globe
 
-Props on `<EarthBackground>` — `rotationPeriod`, `cloudPeriod`, `overlayOpacity`,
-`showStars`, `cloudMap`. The setup doc has the full table.
+```bash
+npm run dev
+open http://localhost:3000/tune
+```
 
-Inside `EarthScene.tsx`:
+Controls down the left, saved looks down the right, the live globe behind both.
+Every visual value the scene uses is defined in `lib/earthConfig.ts` — that one
+file is the shape of a saved preset, the defaults, and the list of sliders.
+Adding a knob is one entry in `PARAMS` plus one line in `DEFAULTS`; the control
+appears on its own.
 
-- `fov` on the `<Canvas camera>` — makes the globe bigger or smaller. **Do not
-  set the camera distance**; `FitCamera` computes it from the viewport, and a
-  hardcoded value crops the planet off the edges of a phone.
-- `SUN_POSITION` — which hemisphere is lit. The light and the atmosphere shader
-  both read it, so they cannot drift apart.
-- `ATMOSPHERE_SCALE` / `_POWER` / `_INTENSITY` — the rim glow.
+**The tuner only runs locally, and it 404s in production.** Saving writes files,
+and Vercel's filesystem is read-only — a Save button on the live site could
+never work, so the page refuses to exist there rather than lying about it.
+
+Two things about the framing worth knowing before you reach for them:
+
+- **Globe size** is the zoom. **Lens angle is not** — the camera distance is
+  solved *from* the field of view so the globe fills the same fraction of the
+  screen at any aspect ratio, which means the two cancel out. Widening the lens
+  changes how much the sphere bulges toward you, not how big it is.
+- Never hardcode a camera distance. A fixed one frames correctly for exactly
+  one window shape and crops the planet off the edges of a phone.
 
 **If you change how the globe looks, recapture the poster** (below), or the
-still frame shown during load will be of the old one.
+still frame shown during load will be of the old planet.
+
+### How a saved look reaches the live site
+
+1. Tune, name it, **Save** → writes `config/earth/<name>.json`.
+2. **Use this on the site** → writes `config/earth/_active.json`.
+3. Commit both and push. The home page reads the active preset at build time,
+   so the deploy is what actually changes what visitors see.
+
+Presets are plain JSON and safe to hand-edit or diff. They are also treated as
+untrusted on read: unknown keys are dropped and numbers are clamped into range,
+so an old or mangled file falls back to sane values instead of shipping a broken
+globe. With nothing marked active, the site uses the built-in defaults.
 
 ## Textures
 
