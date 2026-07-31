@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dane of Earth — app
 
-## Getting Started
+The app that runs at **app.daneofearth.org**. The main site, `daneofearth.org`,
+is a separate WordPress install and is not touched by anything in this repo.
 
-First, run the development server:
+Right now this is one page: a rotating Earth background with a placeholder
+headline over it.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## What is here
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+app/page.tsx                     the landing page
+components/earth/
+  EarthBackground.tsx            ← import this
+  EarthScene.tsx                 ← never imported directly
+public/textures/                 committed, ~1.2MB total
+scripts/build-textures.mjs       regenerates the maps from source
+scripts/capture-poster.mjs       regenerates the poster from the live app
+docs/EARTH-BACKGROUND-SETUP.md   the original spec these components came from
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The two components arrived as a working drop with their own setup doc, kept in
+`docs/`. That doc is still the best explanation of *why* the globe is built the
+way it is — the color-space rules, the `frameloop="never"` pause, the poster
+strategy. Read it before changing `EarthScene.tsx`.
 
-## Learn More
+A few things have changed since it was written, all noted in code comments:
+the camera distance is now derived from the viewport rather than fixed, the
+atmosphere glow is gated on the sun direction, the poster hands off to the
+canvas instead of sitting behind it forever, and textures are configured through
+`useTexture`'s `onLoad` instead of by mutating the returned object.
 
-To learn more about Next.js, take a look at the following resources:
+## Tuning the globe
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Props on `<EarthBackground>` — `rotationPeriod`, `cloudPeriod`, `overlayOpacity`,
+`showStars`, `cloudMap`. The setup doc has the full table.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Inside `EarthScene.tsx`:
 
-## Deploy on Vercel
+- `fov` on the `<Canvas camera>` — makes the globe bigger or smaller. **Do not
+  set the camera distance**; `FitCamera` computes it from the viewport, and a
+  hardcoded value crops the planet off the edges of a phone.
+- `SUN_POSITION` — which hemisphere is lit. The light and the atmosphere shader
+  both read it, so they cannot drift apart.
+- `ATMOSPHERE_SCALE` / `_POWER` / `_INTENSITY` — the rim glow.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**If you change how the globe looks, recapture the poster** (below), or the
+still frame shown during load will be of the old one.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Textures
+
+`npm run textures` downloads the source maps and writes `public/textures/`.
+
+The outputs are committed, so a fresh clone and a deploy both work without
+running it. You only need it to change resolution or source. The 16MB downloads
+are cached in `.texture-cache/` (gitignored).
+
+Sources are public domain / CC-BY from
+[solarsystemscope.com/textures](https://www.solarsystemscope.com/textures),
+which mirrors NASA's Blue Marble.
+
+Two sizes of day map ship: 4096×2048, and a 2048×1024 for viewports under
+900px. That is a VRAM decision, not a bandwidth one — on the GPU the 4096 map
+is not its 0.6MB of JPEG, it is ~33MB of raw pixels plus mipmaps.
+
+Equirectangular maps must stay exactly 2:1 or the geography pinches at the
+poles. The build script asserts the dimensions rather than trusting the resize.
+
+### Regenerating the poster
+
+The poster is the still frame painted before WebGL is ready, and the only thing
+a visitor sees if WebGL fails or they have reduced motion on. It is captured
+from the running app, so it needs a browser:
+
+```bash
+npm install -D playwright && npx playwright install chromium
+npm run dev                                    # in another terminal
+node scripts/capture-poster.mjs http://localhost:3000
+```
+
+Playwright is deliberately not a dependency — it is only needed for this.
+
+## Deploying
+
+Not deployed yet. Vercel is the path of least resistance (Next 16, static
+output, Vercel CLI already installed), with `app.daneofearth.org` added as a
+domain — that is a CNAME on the existing DNS and does not touch the records
+pointing `daneofearth.org` at WordPress.
+
+## Content
+
+The headline and subhead in `app/page.tsx` are placeholders. Copy is HQ's lane.

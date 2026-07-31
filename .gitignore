@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# texture source downloads (16MB) — outputs in public/textures are committed
+/.texture-cache
