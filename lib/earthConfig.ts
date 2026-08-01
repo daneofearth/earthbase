@@ -22,7 +22,7 @@ export type EarthConfig = {
 
   // Orientation
   tilt: number
-  nod: number
+  startLatitude: number
   startLongitude: number
 
   // Light
@@ -131,8 +131,10 @@ export const DEFAULTS: EarthConfig = {
   offsetY: 0,
 
   tilt: 23.4,
-  nod: 0,
-  startLongitude: 0,
+  // Dane's spot in the Oregon Cascades foothills. The full precision is
+  // meaningless at planet scale but costs nothing to keep.
+  startLatitude: 44.360277,
+  startLongitude: -122.855294,
 
   sunAzimuth: 51,
   sunElevation: 17,
@@ -330,26 +332,26 @@ export const PARAMS: ParamDef[] = [
     hint: '23.4° is the real one. Leans the pole left or right.',
   },
   {
-    key: 'nod',
-    label: 'Nod',
+    key: 'startLatitude',
+    label: 'Facing latitude',
     tab: 'Earth', group: 'Orientation',
     kind: 'range',
-    min: -60,
-    max: 60,
-    step: 0.5,
+    min: -80,
+    max: 80,
+    step: 0.1,
     unit: '°',
-    hint: 'Tips the north pole toward or away from you, so you look down on the planet a little.',
+    hint: 'The real latitude at the centre of the globe. Positive is north — raising it looks down on the planet. A big axial tilt puts the most extreme latitudes out of reach.',
   },
   {
     key: 'startLongitude',
-    label: 'Starting longitude',
+    label: 'Facing longitude',
     tab: 'Earth', group: 'Orientation',
     kind: 'range',
     min: -180,
     max: 180,
-    step: 1,
+    step: 0.1,
     unit: '°',
-    hint: 'Which part of Earth faces front when the page loads. 0 is the Americas.',
+    hint: 'The real longitude at the centre when the page loads — the spin carries on from there. Negative is west.',
   },
 
   // ---- Light

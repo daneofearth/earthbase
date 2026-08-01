@@ -34,18 +34,63 @@ function sunVector(azimuthDeg: number, elevationDeg: number): THREE.Vector3 {
   ).normalize()
 }
 
+/* ------------------------------------------------------- geographic aiming */
+
+/**
+ * Which way to turn the globe so a given place faces the camera.
+ *
+ * Two conventions this rests on, both verified against the live scene by the
+ * test suite rather than assumed. First, three.js's sphere wraps an
+ * equirectangular texture so that with no rotation at all, the point facing
+ * the camera is the equator at 90°W — which is why the old "longitude 0"
+ * control actually showed the Americas. Second, the group's Euler order
+ * applies the mesh's own spin first, then the tilt roll, then the nod.
+ *
+ * Tilt is a roll about the viewing axis, so it can never change WHICH point
+ * faces the camera — but it changes how much nod a latitude needs, and swings
+ * the yaw the longitude needs. Both are solved exactly:
+ *
+ *   sin(latitude) = sin(nod) · cos(tilt)
+ *   yaw = angle of the target in the x–z plane − angle of the camera axis
+ *
+ * A big tilt puts extreme latitudes out of reach (the asin argument would
+ * pass 1); the clamp then gives the nearest attainable framing instead of NaN.
+ */
+function orientationFor(latDeg: number, lonDeg: number, tiltDeg: number) {
+  const lat = DEG(latDeg)
+  const lon = DEG(lonDeg)
+  const tilt = DEG(tiltDeg)
+
+  const nod = Math.asin(
+    Math.min(1, Math.max(-1, Math.sin(lat) / Math.max(1e-9, Math.cos(tilt)))),
+  )
+
+  // The mesh-local direction that must end up facing the camera…
+  const targetX = Math.cos(lon) * Math.cos(lat)
+  const targetZ = -Math.sin(lon) * Math.cos(lat)
+  // …and where the camera's axis lands in mesh coordinates before any spin.
+  const axisX = Math.sin(nod) * Math.sin(tilt)
+  const axisZ = Math.cos(nod)
+
+  return {
+    nod,
+    yaw: Math.atan2(targetZ, targetX) - Math.atan2(axisZ, axisX),
+  }
+}
+
 /* ------------------------------------------------------------------ Earth */
 
 function Earth({
   map,
   period,
   reverse,
-  startLongitude,
+  startYaw,
 }: {
   map: string
   period: number
   reverse: boolean
-  startLongitude: number
+  /** Radians — solved by orientationFor, not a raw longitude. */
+  startYaw: number
 }) {
   const ref = useRef<THREE.Mesh>(null!)
 
@@ -63,8 +108,8 @@ function Earth({
   const texture = useTexture(map, configure)
 
   useEffect(() => {
-    ref.current.rotation.y = DEG(startLongitude)
-  }, [startLongitude])
+    ref.current.rotation.y = startYaw
+  }, [startYaw])
 
   // `delta` is seconds since the last frame, so the spin rate is identical
   // on a 60Hz laptop and a 144Hz monitor. Never increment by a fixed number.
@@ -87,14 +132,14 @@ function Clouds({
   map,
   period,
   reverse,
-  startLongitude,
+  startYaw,
   opacity,
   altitude,
 }: {
   map: string
   period: number
   reverse: boolean
-  startLongitude: number
+  startYaw: number
   opacity: number
   altitude: number
 }) {
@@ -111,8 +156,8 @@ function Clouds({
   const texture = useTexture(map, configure)
 
   useEffect(() => {
-    ref.current.rotation.y = DEG(startLongitude)
-  }, [startLongitude])
+    ref.current.rotation.y = startYaw
+  }, [startYaw])
 
   useFrame((_, delta) => {
     if (period <= 0) return
@@ -312,6 +357,11 @@ function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () 
   const cloudPeriod =
     config.cloudSpeedRatio > 0 ? config.rotationPeriod / config.cloudSpeedRatio : 0
 
+  const aim = useMemo(
+    () => orientationFor(config.startLatitude, config.startLongitude, config.tilt),
+    [config.startLatitude, config.startLongitude, config.tilt],
+  )
+
   return (
     <>
       {/* Declared rather than mutated after the fact, so fov and distance stay
@@ -336,20 +386,21 @@ function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () 
       )}
 
       <Suspense fallback={null}>
-        {/* Stays at the origin. Framing is the lens's job — see useViewport. */}
-        <group rotation={[DEG(config.nod), 0, DEG(config.tilt)]}>
+        {/* Stays at the origin. Framing is the lens's job — see useViewport.
+            The nod is solved from the facing latitude, not set directly. */}
+        <group rotation={[aim.nod, 0, DEG(config.tilt)]}>
           <Earth
             map={dayMap}
             period={config.rotationPeriod}
             reverse={config.reverse}
-            startLongitude={config.startLongitude}
+            startYaw={aim.yaw}
           />
           {config.cloudsEnabled && (
             <Clouds
               map="/textures/earth-clouds.jpg"
               period={cloudPeriod}
               reverse={config.reverse}
-              startLongitude={config.startLongitude}
+              startYaw={aim.yaw}
               opacity={config.cloudOpacity}
               altitude={config.cloudAltitude}
             />
@@ -410,6 +461,14 @@ export default function EarthScene({ config, active = true, onReady }: EarthScen
       // No `camera` prop: SceneContents declares a PerspectiveCamera with
       // makeDefault, so fov and distance come from the config in one place.
       gl={{ antialias: true, powerPreference: 'high-performance', alpha: true }}
+      // Dev-only escape hatch: lets the test suite reach into the real scene
+      // graph and verify what actually faces the camera, instead of trusting
+      // the same math it is supposed to be checking. Absent in production.
+      onCreated={(state) => {
+        if (process.env.NODE_ENV === 'development') {
+          ;(window as unknown as { __earthScene?: unknown }).__earthScene = state.scene
+        }
+      }}
     >
       <SceneContents config={config} onReady={onReady} />
     </Canvas>
