@@ -11,7 +11,16 @@
 
 import { useCallback, useState } from 'react'
 import EarthBackground from '@/components/earth/EarthBackground'
-import { DEFAULTS, GROUPS, PARAMS, type EarthConfig, type ParamDef } from '@/lib/earthConfig'
+import SiteText from '@/components/SiteText'
+import {
+  DEFAULTS,
+  GROUPS,
+  PARAMS,
+  TABS,
+  type EarthConfig,
+  type ParamDef,
+  type Tab,
+} from '@/lib/earthConfig'
 
 type Preset = { slug: string; name: string; savedAt: string; values: EarthConfig }
 
@@ -42,6 +51,11 @@ export default function Tuner({
   const [name, setName] = useState('')
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [tab, setTab] = useState<Tab>('Earth')
+  // The panels cover the left and right thirds of the screen, which is exactly
+  // where the text position controls put the text. Without a way to get them
+  // out of the way you cannot see what you are aiming at.
+  const [showPanels, setShowPanels] = useState(true)
 
   const set = useCallback(<K extends keyof EarthConfig>(key: K, value: EarthConfig[K]) => {
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -106,32 +120,60 @@ export default function Tuner({
     // <body> in the layout, which paints below negative z-index children.
     <main className="relative min-h-screen overflow-hidden text-white">
       <EarthBackground config={values} />
+      <SiteText config={values} />
 
-      <div className="relative z-10 flex min-h-screen flex-col gap-4 p-4 lg:flex-row lg:items-start">
+      <button
+        onClick={() => setShowPanels((v) => !v)}
+        className="fixed right-4 bottom-10 z-30 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-xs text-white/70 backdrop-blur transition-colors hover:text-white"
+      >
+        {showPanels ? 'Hide panels' : 'Show panels'}
+      </button>
+
+      <div
+        className={`relative z-10 flex min-h-screen flex-col gap-4 p-4 lg:flex-row lg:items-start ${
+          showPanels ? '' : 'pointer-events-none invisible'
+        }`}
+      >
         {/* ---------------------------------------------------- controls */}
         <aside className="w-full shrink-0 rounded-lg border border-white/10 bg-black/70 backdrop-blur lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-80 lg:overflow-y-auto">
-          <header className="border-b border-white/10 px-4 py-3">
-            <h1 className="text-sm font-semibold">Controls</h1>
-            <p className="mt-1 text-xs text-white/50">
+          <header className="border-b border-white/10">
+            <nav className="flex">
+              {TABS.map((t) => {
+                const empty = GROUPS[t].length === 0
+                return (
+                  <button
+                    key={t}
+                    onClick={() => !empty && setTab(t)}
+                    disabled={empty}
+                    title={empty ? 'Not built yet' : undefined}
+                    className={`flex-1 border-b-2 px-2 py-3 text-xs font-medium transition-colors ${
+                      tab === t
+                        ? 'border-white text-white'
+                        : empty
+                          ? 'border-transparent text-white/20'
+                          : 'border-transparent text-white/45 hover:text-white/80'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                )
+              })}
+            </nav>
+            <p className="px-4 pb-3 text-xs text-white/50">
               {dirtyCount === 0
                 ? 'Matching the built-in defaults.'
                 : `${dirtyCount} changed from defaults.`}
             </p>
           </header>
 
-          {GROUPS.map((group) => (
+          {GROUPS[tab].map((group) => (
             <section key={group} className="border-b border-white/10 px-4 py-3 last:border-0">
               <h2 className="mb-3 text-xs font-semibold tracking-wide text-white/40 uppercase">
                 {group}
               </h2>
               <div className="space-y-4">
-                {PARAMS.filter((p) => p.group === group).map((param) => (
-                  <Control
-                    key={param.key}
-                    param={param}
-                    values={values}
-                    onChange={set}
-                  />
+                {PARAMS.filter((p) => p.tab === tab && p.group === group).map((param) => (
+                  <Control key={param.key} param={param} values={values} onChange={set} />
                 ))}
               </div>
             </section>
@@ -147,16 +189,10 @@ export default function Tuner({
           </div>
         </aside>
 
-        {/* ------------------------------------------------ centre preview */}
-        <div className="flex min-h-[40vh] flex-1 items-center justify-center px-4 py-16 text-center">
-          <div>
-            <h2 className="text-5xl font-semibold tracking-tight sm:text-7xl">Dane of Earth</h2>
-            <p className="mt-6 text-lg text-white/70">Something is being built here.</p>
-            <p className="mt-10 text-xs text-white/30">
-              Real headline, real scrim — judge the darkness slider against this.
-            </p>
-          </div>
-        </div>
+        {/* Spacer. The text itself is absolutely positioned across the whole
+            screen, exactly as on the live page, so its position controls mean
+            the same thing here as they do there. */}
+        <div className="min-h-[40vh] flex-1" />
 
         {/* ----------------------------------------------------- presets */}
         <aside className="w-full shrink-0 rounded-lg border border-white/10 bg-black/70 backdrop-blur lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-80 lg:overflow-y-auto">
@@ -313,6 +349,7 @@ function Control({
       <label className="flex cursor-pointer items-center justify-between gap-3">
         <span className="text-sm">{param.label}</span>
         <input
+          id={param.key}
           type="checkbox"
           checked={value as boolean}
           onChange={(e) => onChange(param.key, e.target.checked as never)}
@@ -332,6 +369,56 @@ function Control({
           onChange={(e) => onChange(param.key, e.target.value as never)}
           className="h-7 w-12 cursor-pointer rounded border border-white/15 bg-transparent"
         />
+      </label>
+    )
+  }
+
+  if (param.kind === 'select') {
+    return (
+      <label className="block">
+        <span className="text-sm">{param.label}</span>
+        <div className="mt-1.5 flex gap-1">
+          {param.options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(param.key, option as never)}
+              className={`flex-1 rounded border px-2 py-1.5 text-xs capitalize transition-colors ${
+                value === option
+                  ? 'border-white/60 bg-white/15 text-white'
+                  : 'border-white/15 text-white/50 hover:text-white'
+              }`}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+        {param.hint && <p className="mt-1 text-xs leading-snug text-white/35">{param.hint}</p>}
+      </label>
+    )
+  }
+
+  if (param.kind === 'text') {
+    const text = value as string
+    const shared = {
+      id: param.key,
+      value: text,
+      onChange: (e: { target: { value: string } }) =>
+        onChange(param.key, e.target.value.slice(0, param.maxLength) as never),
+      placeholder: param.placeholder,
+      className:
+        'mt-1.5 w-full rounded border border-white/15 bg-black/50 px-2 py-1.5 text-sm outline-none placeholder:text-white/25 focus:border-white/40',
+    }
+    return (
+      <label className="block" htmlFor={param.key}>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-sm">{param.label}</span>
+          <span className="font-mono text-xs text-white/35">
+            {text.length}/{param.maxLength}
+          </span>
+        </div>
+        {param.multiline ? <textarea rows={3} {...shared} /> : <input type="text" {...shared} />}
+        {param.hint && <p className="mt-1 text-xs leading-snug text-white/35">{param.hint}</p>}
       </label>
     )
   }

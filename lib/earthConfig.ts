@@ -50,6 +50,37 @@ export type EarthConfig = {
   // Overlay
   scrimOpacity: number
   scrimColor: string
+
+  // Text — layout of the block as a whole
+  textAlign: string
+  textOffsetX: number
+  textOffsetY: number
+  textMaxWidth: number
+
+  // Text — title
+  titleShow: boolean
+  titleText: string
+  titleSize: number
+  titleWeight: number
+  titleColor: string
+  titleTracking: number
+
+  // Text — subtitle
+  subtitleShow: boolean
+  subtitleText: string
+  subtitleSize: number
+  subtitleWeight: number
+  subtitleColor: string
+  subtitleGap: number
+
+  // Text — description
+  descriptionShow: boolean
+  descriptionText: string
+  descriptionSize: number
+  descriptionWeight: number
+  descriptionColor: string
+  descriptionGap: number
+  descriptionLineHeight: number
 }
 
 export const DEFAULTS: EarthConfig = {
@@ -86,34 +117,60 @@ export const DEFAULTS: EarthConfig = {
 
   scrimOpacity: 0.5,
   scrimColor: '#000000',
+
+  textAlign: 'center',
+  textOffsetX: 0,
+  textOffsetY: 0,
+  textMaxWidth: 60,
+
+  titleShow: true,
+  titleText: 'Dane of Earth',
+  titleSize: 4.5,
+  titleWeight: 600,
+  titleColor: '#ffffff',
+  titleTracking: -0.025,
+
+  subtitleShow: true,
+  subtitleText: 'Something is being built here.',
+  subtitleSize: 1.125,
+  subtitleWeight: 400,
+  subtitleColor: '#b3b3b3',
+  subtitleGap: 1.5,
+
+  descriptionShow: true,
+  descriptionText: 'daneofearth.org',
+  descriptionSize: 0.875,
+  descriptionWeight: 400,
+  descriptionColor: '#808080',
+  descriptionGap: 2.5,
+  descriptionLineHeight: 1.6,
 }
 
-export const GROUPS = [
-  'Motion',
-  'Framing',
-  'Orientation',
-  'Light',
-  'Atmosphere',
-  'Clouds',
-  'Stars',
-  'Overlay',
-] as const
+export const TABS = ['Earth', 'Text', 'Effects'] as const
+export type Tab = (typeof TABS)[number]
 
-export type Group = (typeof GROUPS)[number]
+/** Which groups appear under each tab, in order. */
+export const GROUPS: Record<Tab, readonly string[]> = {
+  Earth: ['Motion', 'Framing', 'Orientation', 'Light', 'Atmosphere', 'Clouds', 'Stars', 'Overlay'],
+  Text: ['Layout', 'Title', 'Subtitle', 'Description'],
+  Effects: [],
+}
 
-type Base = { key: keyof EarthConfig; label: string; group: Group; hint?: string }
+type Base = { key: keyof EarthConfig; label: string; tab: Tab; group: string; hint?: string }
 
 export type ParamDef =
   | (Base & { kind: 'range'; min: number; max: number; step: number; unit?: string })
   | (Base & { kind: 'toggle' })
   | (Base & { kind: 'color' })
+  | (Base & { kind: 'text'; maxLength: number; multiline?: boolean; placeholder?: string })
+  | (Base & { kind: 'select'; options: readonly string[] })
 
 export const PARAMS: ParamDef[] = [
   // ---- Motion
   {
     key: 'rotationPeriod',
     label: 'Rotation period',
-    group: 'Motion',
+    tab: 'Earth', group: 'Motion',
     kind: 'range',
     min: 20,
     max: 600,
@@ -124,7 +181,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'cloudSpeedRatio',
     label: 'Cloud speed',
-    group: 'Motion',
+    tab: 'Earth', group: 'Motion',
     kind: 'range',
     min: 0,
     max: 3,
@@ -135,7 +192,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'reverse',
     label: 'Reverse spin',
-    group: 'Motion',
+    tab: 'Earth', group: 'Motion',
     kind: 'toggle',
     hint: 'Off is the direction Earth actually turns.',
   },
@@ -144,7 +201,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'globeSize',
     label: 'Globe size',
-    group: 'Framing',
+    tab: 'Earth', group: 'Framing',
     kind: 'range',
     min: 0.25,
     max: 1.6,
@@ -154,7 +211,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'lens',
     label: 'Lens angle',
-    group: 'Framing',
+    tab: 'Earth', group: 'Framing',
     kind: 'range',
     min: 15,
     max: 90,
@@ -165,7 +222,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'offsetX',
     label: 'Horizontal position',
-    group: 'Framing',
+    tab: 'Earth', group: 'Framing',
     kind: 'range',
     min: -1,
     max: 1,
@@ -175,7 +232,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'offsetY',
     label: 'Vertical position',
-    group: 'Framing',
+    tab: 'Earth', group: 'Framing',
     kind: 'range',
     min: -1,
     max: 1,
@@ -186,7 +243,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'tilt',
     label: 'Axial tilt',
-    group: 'Orientation',
+    tab: 'Earth', group: 'Orientation',
     kind: 'range',
     min: -45,
     max: 45,
@@ -197,7 +254,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'nod',
     label: 'Nod',
-    group: 'Orientation',
+    tab: 'Earth', group: 'Orientation',
     kind: 'range',
     min: -60,
     max: 60,
@@ -208,7 +265,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'startLongitude',
     label: 'Starting longitude',
-    group: 'Orientation',
+    tab: 'Earth', group: 'Orientation',
     kind: 'range',
     min: -180,
     max: 180,
@@ -221,7 +278,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'sunAzimuth',
     label: 'Sun direction',
-    group: 'Light',
+    tab: 'Earth', group: 'Light',
     kind: 'range',
     min: 0,
     max: 360,
@@ -232,7 +289,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'sunElevation',
     label: 'Sun height',
-    group: 'Light',
+    tab: 'Earth', group: 'Light',
     kind: 'range',
     min: -90,
     max: 90,
@@ -243,7 +300,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'sunIntensity',
     label: 'Sun brightness',
-    group: 'Light',
+    tab: 'Earth', group: 'Light',
     kind: 'range',
     min: 0,
     max: 5,
@@ -252,7 +309,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'nightFill',
     label: 'Night fill',
-    group: 'Light',
+    tab: 'Earth', group: 'Light',
     kind: 'range',
     min: 0,
     max: 1,
@@ -261,11 +318,11 @@ export const PARAMS: ParamDef[] = [
   },
 
   // ---- Atmosphere
-  { key: 'atmosphereColor', label: 'Glow colour', group: 'Atmosphere', kind: 'color' },
+  { key: 'atmosphereColor', label: 'Glow colour', tab: 'Earth', group: 'Atmosphere', kind: 'color' },
   {
     key: 'atmosphereReach',
     label: 'Glow reach',
-    group: 'Atmosphere',
+    tab: 'Earth', group: 'Atmosphere',
     kind: 'range',
     min: 1,
     max: 1.4,
@@ -275,7 +332,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'atmosphereTightness',
     label: 'Glow tightness',
-    group: 'Atmosphere',
+    tab: 'Earth', group: 'Atmosphere',
     kind: 'range',
     min: 0.5,
     max: 8,
@@ -285,7 +342,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'atmosphereBrightness',
     label: 'Glow brightness',
-    group: 'Atmosphere',
+    tab: 'Earth', group: 'Atmosphere',
     kind: 'range',
     min: 0,
     max: 3,
@@ -293,11 +350,11 @@ export const PARAMS: ParamDef[] = [
   },
 
   // ---- Clouds
-  { key: 'cloudsEnabled', label: 'Clouds', group: 'Clouds', kind: 'toggle' },
+  { key: 'cloudsEnabled', label: 'Clouds', tab: 'Earth', group: 'Clouds', kind: 'toggle' },
   {
     key: 'cloudOpacity',
     label: 'Cloud opacity',
-    group: 'Clouds',
+    tab: 'Earth', group: 'Clouds',
     kind: 'range',
     min: 0,
     max: 1,
@@ -307,7 +364,7 @@ export const PARAMS: ParamDef[] = [
   {
     key: 'cloudAltitude',
     label: 'Cloud altitude',
-    group: 'Clouds',
+    tab: 'Earth', group: 'Clouds',
     kind: 'range',
     min: 1,
     max: 1.06,
@@ -316,22 +373,228 @@ export const PARAMS: ParamDef[] = [
   },
 
   // ---- Stars
-  { key: 'starsEnabled', label: 'Stars', group: 'Stars', kind: 'toggle' },
-  { key: 'starCount', label: 'Star count', group: 'Stars', kind: 'range', min: 0, max: 8000, step: 100 },
-  { key: 'starSize', label: 'Star size', group: 'Stars', kind: 'range', min: 0.5, max: 10, step: 0.1 },
+  { key: 'starsEnabled', label: 'Stars', tab: 'Earth', group: 'Stars', kind: 'toggle' },
+  { key: 'starCount', label: 'Star count', tab: 'Earth', group: 'Stars', kind: 'range', min: 0, max: 8000, step: 100 },
+  { key: 'starSize', label: 'Star size', tab: 'Earth', group: 'Stars', kind: 'range', min: 0.5, max: 10, step: 0.1 },
 
   // ---- Overlay
   {
     key: 'scrimOpacity',
     label: 'Scrim darkness',
-    group: 'Overlay',
+    tab: 'Earth', group: 'Overlay',
     kind: 'range',
     min: 0,
     max: 0.9,
     step: 0.01,
     hint: 'The wash over everything that keeps the headline readable. Judge it against the text, not the planet.',
   },
-  { key: 'scrimColor', label: 'Scrim colour', group: 'Overlay', kind: 'color' },
+  { key: 'scrimColor', label: 'Scrim colour', tab: 'Earth', group: 'Overlay', kind: 'color' },
+
+  /* ===================================================================== Text
+   *
+   * Sizes are in rem and rendered through a min() against a vw value, so one
+   * number covers every screen: a 4.5rem headline stays 4.5rem on a desktop and
+   * shrinks itself on a phone. Without that, any size big enough to look right
+   * on a laptop overflows a 390px screen.
+   */
+
+  // ---- Layout
+  {
+    key: 'textAlign',
+    label: 'Alignment',
+    tab: 'Text',
+    group: 'Layout',
+    kind: 'select',
+    options: ['left', 'center', 'right'],
+  },
+  {
+    key: 'textOffsetX',
+    label: 'Horizontal position',
+    tab: 'Text',
+    group: 'Layout',
+    kind: 'range',
+    min: -1,
+    max: 1,
+    step: 0.01,
+    hint: 'Moves the whole block. Pair it with the globe position to sit the text beside the planet rather than on top of it.',
+  },
+  {
+    key: 'textOffsetY',
+    label: 'Vertical position',
+    tab: 'Text',
+    group: 'Layout',
+    kind: 'range',
+    min: -1,
+    max: 1,
+    step: 0.01,
+  },
+  {
+    key: 'textMaxWidth',
+    label: 'Block width',
+    tab: 'Text',
+    group: 'Layout',
+    kind: 'range',
+    min: 20,
+    max: 100,
+    step: 1,
+    unit: '%',
+    hint: 'How wide the text may run before wrapping, as a share of the screen. Narrower reads better for long lines.',
+  },
+
+  // ---- Title
+  { key: 'titleShow', label: 'Show title', tab: 'Text', group: 'Title', kind: 'toggle' },
+  {
+    key: 'titleText',
+    label: 'Title',
+    tab: 'Text',
+    group: 'Title',
+    kind: 'text',
+    maxLength: 120,
+    placeholder: 'Dane of Earth',
+  },
+  {
+    key: 'titleSize',
+    label: 'Size',
+    tab: 'Text',
+    group: 'Title',
+    kind: 'range',
+    min: 1,
+    max: 10,
+    step: 0.05,
+    unit: 'rem',
+  },
+  {
+    key: 'titleWeight',
+    label: 'Weight',
+    tab: 'Text',
+    group: 'Title',
+    kind: 'range',
+    min: 100,
+    max: 900,
+    step: 100,
+  },
+  { key: 'titleColor', label: 'Colour', tab: 'Text', group: 'Title', kind: 'color' },
+  {
+    key: 'titleTracking',
+    label: 'Letter spacing',
+    tab: 'Text',
+    group: 'Title',
+    kind: 'range',
+    min: -0.08,
+    max: 0.3,
+    step: 0.005,
+    unit: 'em',
+    hint: 'Large headlines usually want slightly negative spacing; small caps-y text wants positive.',
+  },
+
+  // ---- Subtitle
+  { key: 'subtitleShow', label: 'Show subtitle', tab: 'Text', group: 'Subtitle', kind: 'toggle' },
+  {
+    key: 'subtitleText',
+    label: 'Subtitle',
+    tab: 'Text',
+    group: 'Subtitle',
+    kind: 'text',
+    maxLength: 300,
+    multiline: true,
+    placeholder: 'Something is being built here.',
+  },
+  {
+    key: 'subtitleSize',
+    label: 'Size',
+    tab: 'Text',
+    group: 'Subtitle',
+    kind: 'range',
+    min: 0.6,
+    max: 4,
+    step: 0.025,
+    unit: 'rem',
+  },
+  {
+    key: 'subtitleWeight',
+    label: 'Weight',
+    tab: 'Text',
+    group: 'Subtitle',
+    kind: 'range',
+    min: 100,
+    max: 900,
+    step: 100,
+  },
+  { key: 'subtitleColor', label: 'Colour', tab: 'Text', group: 'Subtitle', kind: 'color' },
+  {
+    key: 'subtitleGap',
+    label: 'Space above',
+    tab: 'Text',
+    group: 'Subtitle',
+    kind: 'range',
+    min: 0,
+    max: 8,
+    step: 0.1,
+    unit: 'rem',
+  },
+
+  // ---- Description
+  {
+    key: 'descriptionShow',
+    label: 'Show description',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'toggle',
+  },
+  {
+    key: 'descriptionText',
+    label: 'Description',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'text',
+    maxLength: 1000,
+    multiline: true,
+    placeholder: 'daneofearth.org',
+  },
+  {
+    key: 'descriptionSize',
+    label: 'Size',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'range',
+    min: 0.6,
+    max: 3,
+    step: 0.025,
+    unit: 'rem',
+  },
+  {
+    key: 'descriptionWeight',
+    label: 'Weight',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'range',
+    min: 100,
+    max: 900,
+    step: 100,
+  },
+  { key: 'descriptionColor', label: 'Colour', tab: 'Text', group: 'Description', kind: 'color' },
+  {
+    key: 'descriptionGap',
+    label: 'Space above',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'range',
+    min: 0,
+    max: 8,
+    step: 0.1,
+    unit: 'rem',
+  },
+  {
+    key: 'descriptionLineHeight',
+    label: 'Line height',
+    tab: 'Text',
+    group: 'Description',
+    kind: 'range',
+    min: 1,
+    max: 2.4,
+    step: 0.05,
+    hint: 'Only shows up once the text wraps to more than one line.',
+  },
 ]
 
 const PARAM_BY_KEY = new Map(PARAMS.map((p) => [p.key, p]))
@@ -358,6 +621,14 @@ export function resolveConfig(saved: unknown): EarthConfig {
     } else if (def.kind === 'toggle' && typeof value === 'boolean') {
       ;(out[def.key] as boolean) = value
     } else if (def.kind === 'color' && typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
+      ;(out[def.key] as string) = value
+    } else if (def.kind === 'text' && typeof value === 'string') {
+      // Truncated rather than rejected: a too-long string is someone pasting an
+      // essay, not an attack, and silently dropping their text would be worse.
+      // It is rendered as text content, never as HTML, so there is nothing to
+      // escape here.
+      ;(out[def.key] as string) = value.slice(0, def.maxLength)
+    } else if (def.kind === 'select' && typeof value === 'string' && def.options.includes(value)) {
       ;(out[def.key] as string) = value
     }
   }
