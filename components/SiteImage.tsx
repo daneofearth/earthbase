@@ -16,44 +16,55 @@ import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
  * there.
  *
  * The inner one carries every animated property in a single transform, so
- * growing, travelling and turning cannot finish at different moments. See
- * ARRIVING for why that matters.
+ * growing, travelling and turning cannot finish at different moments.
+ *
+ * ## Why the keyframes are generated, not hand-placed
+ *
+ * Browsers interpolate linearly between keyframes. A hand-placed midpoint —
+ * the arc's peak, the wobble's over-rotation — is therefore a corner: the
+ * velocity changes discontinuously as the animation passes through it, and a
+ * corner in the middle of a spin reads as a jerk. Choosing Linear landing made
+ * it worse, because nothing softened the corners.
+ *
+ * So the trajectory is computed as continuous math — position, angle, scale
+ * and opacity as functions of time — and sampled densely (60–240 frames per
+ * phase). At that density the piecewise-linear approximation is far below
+ * anything the eye can pick up, the arc is a true parabola, the wobble is a
+ * smooth swing, and every property shares one clock by construction.
  */
 
+type EasingFn = (t: number) => number
+
 /**
- * One curve per phase, shared by everything that moves.
+ * Arrival easings, applied to everything that moves at once.
  *
- * An earlier version gave rotation its own, gentler curve to stop a multi-turn
- * spin appearing to stall. That fixed the stall and introduced a worse problem:
- * size and rotation then ran on different curves, so the image reached full
- * size while it was still turning. Two halves of one motion disagreeing is what
- * reads as jerky. Whatever curve is chosen, growing, travelling and turning
- * have to finish together.
- *
- * The curves themselves are also moderate now. The old default completed 87% of
- * its travel in the first 30% of the time — fine for a short slide, but on
- * three turns it whipped through two and a half of them and then crept the last
- * half-turn over a full second. These reach roughly two thirds of the way at
- * the half-way point, so motion stays visible for the whole duration instead of
- * front-loading and trailing off.
+ * Linear is the default: an even rate is predictable and can never look like
+ * hesitation. Glide slows toward the end. Overshoot passes slightly beyond and
+ * settles back — it may exceed 1 briefly, which is the point.
  */
-const ARRIVING: Record<string, string> = {
-  linear: 'linear',
-  glide: 'cubic-bezier(0.5, 1, 0.89, 1)',
-  overshoot: 'cubic-bezier(0.34, 1.3, 0.64, 1)',
+const ARRIVE_EASE: Record<string, EasingFn> = {
+  linear: (u) => u,
+  glide: (u) => 1 - (1 - u) * (1 - u),
+  overshoot: (u) => {
+    const c1 = 1.2
+    const c3 = c1 + 1
+    const p = u - 1
+    return 1 + c3 * p * p * p + c1 * p * p
+  },
 }
 
 /**
- * Departure curves — the mirror images.
- *
- * An arrival decelerates into place; a departure accelerates away. Reusing the
- * arrival curves would make the image crawl out, which reads as hesitation
- * rather than leaving.
+ * Departure easings — the mirror images. An arrival decelerates into place; a
+ * departure accelerates away. Anticipate dips negative first: the wind-up.
  */
-const LEAVING: Record<string, string> = {
-  linear: 'linear',
-  glide: 'cubic-bezier(0.11, 0, 0.5, 0)',
-  anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.36)',
+const LEAVE_EASE: Record<string, EasingFn> = {
+  linear: (v) => v,
+  glide: (v) => v * v,
+  anticipate: (v) => {
+    const c1 = 1.2
+    const c3 = c1 + 1
+    return c3 * v * v * v - c1 * v * v
+  },
 }
 
 const PIVOT: Record<string, string> = {
@@ -83,7 +94,12 @@ function safeSrc(src: string): string | null {
   }
 }
 
-type Frame = { offset: number; transform: string; opacity?: number; easing?: string }
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
+
+/** Samples per phase: ~90 per second of motion, within sane bounds. */
+function sampleCount(seconds: number): number {
+  return Math.min(240, Math.max(60, Math.round(seconds * 90)))
+}
 
 export default function SiteImage({
   config,
@@ -115,8 +131,8 @@ export default function SiteImage({
     const arrived = arriveFor / total
     const leaves = (arriveFor + holdFor) / total
 
-    const arriveEase = ARRIVING[c.fxLanding] ?? ARRIVING.linear
-    const leaveEase = LEAVING[c.fxExitLeaving] ?? LEAVING.linear
+    const arriveEase = ARRIVE_EASE[c.fxLanding] ?? ARRIVE_EASE.linear
+    const leaveEase = LEAVE_EASE[c.fxExitLeaving] ?? LEAVE_EASE.linear
 
     // Where it comes from, as a delta from where it rests, so the resting
     // position stays the single source of truth for both.
@@ -124,82 +140,104 @@ export default function SiteImage({
     const dy = -(c.fxStartY - c.imageY) * 50
     // Starts at -spin and arrives at 0, so a positive count reads clockwise.
     const spin = c.fxSpins * 360
+    const wobbleSign = c.fxSpins < 0 ? -1 : 1
     // Drift, not an absolute point: 0 leaves it where it sits rather than
     // sliding to the middle of the screen on the way out.
     const ex = c.fxExitDriftX * 50
     const ey = -c.fxExitDriftY * 50
     const exitSpin = c.fxExitSpins * 360
 
-    // One list, one transform, one curve per segment. Everything that moves is
-    // in here together, which is the only way growing, travelling and turning
-    // can be guaranteed to finish at the same instant.
-    const frames: Frame[] = []
-    const rest = (offset: number, easing?: string): Frame => ({
-      offset,
-      transform: 'translate(0vw, 0vh) rotate(0deg) scale(1)',
-      opacity: 1,
-      easing,
-    })
+    const frames: Keyframe[] = []
+    const push = (offset: number, x: number, y: number, deg: number, scale: number, opacity: number) =>
+      frames.push({
+        offset: Math.min(1, offset),
+        transform: `translate(${x.toFixed(4)}vw, ${y.toFixed(4)}vh) rotate(${deg.toFixed(3)}deg) scale(${Math.max(0, scale).toFixed(5)})`,
+        opacity: clamp01(opacity),
+      })
 
     if (arriveFor > 0) {
-      frames.push({
-        offset: 0,
-        transform: `translate(${dx}vw, ${dy}vh) rotate(${-spin}deg) scale(${c.fxStartScale})`,
-        opacity: c.fxFade ? 0 : 1,
-        easing: arriveEase,
-      })
-      if (c.fxArc > 0) {
-        // A lifted midpoint bends the path into a curve instead of a rail.
-        frames.push({
-          offset: arrived / 2,
-          transform: `translate(${dx / 2}vw, ${dy / 2 - c.fxArc}vh) rotate(${-spin / 2}deg) scale(${(c.fxStartScale + 1) / 2})`,
-          opacity: 1,
-          easing: arriveEase,
-        })
+      // A settle only reads as a settle if the image is already home when it
+      // rocks. Adding a swing mid-spin just blends into the remaining rotation
+      // and vanishes. So with Settle on, the whole arrival compresses into the
+      // first 70% and the swing owns the last 30% — arrive, then rock.
+      const settle = c.fxWobble > 0 ? 0.3 : 0
+      const n = sampleCount(arriveFor)
+      for (let i = 0; i <= n; i++) {
+        const p = i / n // fraction of the entrance, in time
+        const u = arriveEase(settle > 0 ? Math.min(1, p / (1 - settle)) : p)
+        let deg = -spin * (1 - u)
+        if (settle > 0) {
+          // A half sine: swings past home and returns to exactly zero.
+          const z = clamp01((p - (1 - settle)) / settle)
+          deg += c.fxWobble * wobbleSign * Math.sin(Math.PI * z)
+        }
+        push(
+          p * arrived,
+          dx * (1 - u),
+          // 4u(1-u) is a parabola: zero at both ends, peak at the middle. It
+          // bends the path smoothly instead of putting a corner at a midpoint.
+          dy * (1 - u) - c.fxArc * 4 * u * (1 - u),
+          deg,
+          c.fxStartScale + (1 - c.fxStartScale) * u,
+          c.fxFade ? u : 1,
+        )
       }
-      if (c.fxWobble > 0) {
-        // Home, but rotated slightly past; the next frame rocks it back.
-        frames.push({
-          offset: arrived * 0.85,
-          transform: `translate(0vw, 0vh) rotate(${c.fxWobble * (c.fxSpins < 0 ? -1 : 1)}deg) scale(1)`,
-          opacity: 1,
-          easing: arriveEase,
-        })
-      }
+    } else {
+      push(0, 0, 0, 0, 1, 1)
     }
 
-    // With no hold, the arrival frame is also the frame the departure starts
-    // from, so it carries the leaving curve rather than a separate one.
-    frames.push(rest(arrived, leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'))
-    if (leaveFor > 0 && holdFor > 0) frames.push(rest(leaves, leaveEase))
+    if (holdFor > 0) push(leaves, 0, 0, 0, 1, 1)
 
     if (leaveFor > 0) {
-      if (c.fxExitArc !== 0) {
-        frames.push({
-          offset: (leaves + 1) / 2,
-          transform: `translate(${ex / 2}vw, ${ey / 2 - c.fxExitArc}vh) rotate(${exitSpin / 2}deg) scale(${(1 + c.fxExitScale) / 2})`,
-          opacity: c.fxExitFade ? 0.5 : 1,
-          easing: leaveEase,
-        })
+      const n = sampleCount(leaveFor)
+      for (let i = 1; i <= n; i++) {
+        const p = i / n
+        const v = leaveEase(p)
+        push(
+          leaves + p * (1 - leaves),
+          ex * v,
+          ey * v - c.fxExitArc * 4 * v * (1 - v),
+          exitSpin * v,
+          1 + (c.fxExitScale - 1) * v,
+          c.fxExitFade ? 1 - v : 1,
+        )
       }
-      frames.push({
-        offset: 1,
-        transform: `translate(${ex}vw, ${ey}vh) rotate(${exitSpin}deg) scale(${c.fxExitScale})`,
-        opacity: c.fxExitFade ? 0 : 1,
-      })
     }
 
-    // Linear at the effect level so the per-keyframe curves govern each segment
-    // on its own; `both` holds the start state through the delay and the end
-    // state after, so nothing flashes into place before it begins.
-    const animation = el.animate(frames, {
+    // Linear at the effect level: the shaping all lives in the sampled values,
+    // so the browser's only job is to join adjacent samples. `both` holds the
+    // first frame through the delay and the last frame after the end, so
+    // nothing flashes into place.
+    const timing: KeyframeAnimationOptions = {
       duration: total * 1000,
       delay: c.fxDelay * 1000,
       easing: 'linear',
       fill: 'both',
-    })
+    }
 
-    return () => animation.cancel()
+    // Wait for the image before starting. Animating while it is still laying
+    // out means its height jumps from zero to real mid-flight, which drags the
+    // pivot with it — a genuine wobble, and one that only happens on the first
+    // uncached visit, which is exactly the visit that matters.
+    let cancelled = false
+    let animation: Animation | null = null
+    const begin = () => {
+      if (!cancelled) animation = el.animate(frames, timing)
+    }
+    const img = el.querySelector('img')
+    if (img && !img.complete) {
+      img.addEventListener('load', begin, { once: true })
+      img.addEventListener('error', begin, { once: true })
+    } else {
+      begin()
+    }
+
+    return () => {
+      cancelled = true
+      img?.removeEventListener('load', begin)
+      img?.removeEventListener('error', begin)
+      animation?.cancel()
+    }
   }, [
     src,
     replayToken,
