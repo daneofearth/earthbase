@@ -233,22 +233,53 @@ function Atmosphere({
  * `globeSize`. Widening the lens changes how much the sphere bulges toward the
  * viewer, not how big it is.
  *
- * Returns the visible half-extents in world units, which is what lets the
- * offsets be expressed as a fraction of the screen rather than in scene units
- * that would drift every time the size changed, plus the camera distance the
- * scene renders declaratively.
+ * ## Why the offsets shift the lens instead of moving the globe
+ *
+ * Under perspective projection a sphere only projects to a circle when it sits
+ * on the optical axis. Move it off-axis and its silhouette cone meets the image
+ * plane obliquely, so it projects to an ellipse — measurably 6.5% wider than
+ * tall at an offset of 0.6, and worse further out or at a wider lens. That is
+ * real optics, not a bug, and no amount of scaling fixes it.
+ *
+ * So the globe stays at the origin and the *frustum* is sheared instead, which
+ * is what a shift lens does on a real camera. The projected circle is unchanged
+ * — we simply display a different window onto the same image plane — so the
+ * planet slides around the frame and stays perfectly round wherever it lands.
  */
-function useViewport(globeSize: number, lens: number) {
+function useViewport(globeSize: number, lens: number, offsetX: number, offsetY: number) {
   const size = useThree((state) => state.size)
+  const camera = useRef<THREE.PerspectiveCamera>(null!)
   const aspect = size.width / size.height
 
   // Half-height in world units. The globe has radius 1, so a half-height of
   // 1/globeSize makes the diameter cover exactly `globeSize` of the short edge.
   const halfHeight = 1 / (globeSize * Math.min(1, aspect))
 
+  useEffect(() => {
+    const cam = camera.current
+    if (!cam) return
+
+    if (offsetX === 0 && offsetY === 0) {
+      cam.clearViewOffset()
+    } else {
+      // Half the viewport in pixels is one half-extent in world units, so the
+      // offsets stay a fraction of the screen and need no unit conversion.
+      // Signs are inverted because moving the *window* right moves the subject
+      // left.
+      cam.setViewOffset(
+        size.width,
+        size.height,
+        (-offsetX * size.width) / 2,
+        (offsetY * size.height) / 2,
+        size.width,
+        size.height,
+      )
+    }
+    cam.updateProjectionMatrix()
+  }, [size.width, size.height, offsetX, offsetY, lens, halfHeight])
+
   return {
-    halfHeight,
-    halfWidth: halfHeight * aspect,
+    camera,
     distance: halfHeight / Math.tan(DEG(lens) / 2),
   }
 }
@@ -265,7 +296,12 @@ function ReadySignal({ onReady }: { onReady?: () => void }) {
 /* ------------------------------------------------------------------ Scene */
 
 function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () => void }) {
-  const { halfWidth, halfHeight, distance } = useViewport(config.globeSize, config.lens)
+  const { camera, distance } = useViewport(
+    config.globeSize,
+    config.lens,
+    config.offsetX,
+    config.offsetY,
+  )
   const sunDir = useMemo(
     () => sunVector(config.sunAzimuth, config.sunElevation),
     [config.sunAzimuth, config.sunElevation],
@@ -280,7 +316,7 @@ function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () 
     <>
       {/* Declared rather than mutated after the fact, so fov and distance stay
           derived from the config instead of drifting out of sync with it. */}
-      <PerspectiveCamera makeDefault fov={config.lens} position={[0, 0, distance]} />
+      <PerspectiveCamera ref={camera} makeDefault fov={config.lens} position={[0, 0, distance]} />
 
       <ambientLight intensity={config.nightFill} />
       <directionalLight position={sunPos} intensity={config.sunIntensity} />
@@ -300,10 +336,8 @@ function SceneContents({ config, onReady }: { config: EarthConfig; onReady?: () 
       )}
 
       <Suspense fallback={null}>
-        <group
-          position={[config.offsetX * halfWidth, config.offsetY * halfHeight, 0]}
-          rotation={[DEG(config.nod), 0, DEG(config.tilt)]}
-        >
+        {/* Stays at the origin. Framing is the lens's job — see useViewport. */}
+        <group rotation={[DEG(config.nod), 0, DEG(config.tilt)]}>
           <Earth
             map={dayMap}
             period={config.rotationPeriod}
