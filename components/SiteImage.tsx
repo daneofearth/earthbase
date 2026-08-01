@@ -4,22 +4,52 @@ import { useEffect, useRef } from 'react'
 import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
 
 /**
- * The floating image, and its arrival.
+ * The floating image, and its arrival and departure.
  *
- * Two nested elements on purpose. The outer one holds where the picture *lives*
- * — position and size, straight from config. The inner one is the only thing
- * the animation touches. Keeping them apart is what makes the resting state the
- * real state: if the entrance never runs, because a visitor asked for reduced
- * motion or the browser is old or a script died, the picture is still exactly
- * where it belongs at the right size. The animation is decoration on top, never
- * the thing that puts it there.
+ * Three nested elements on purpose.
+ *
+ * The outer one holds where the picture *lives* — position and size, straight
+ * from config. Keeping that separate is what makes the resting state the real
+ * state: if the animation never runs, because a visitor asked for reduced
+ * motion or a script died, the picture is still exactly where it belongs at the
+ * right size. The animation is decoration on top, never the thing that puts it
+ * there.
+ *
+ * The inner two split *travel* from *rotation*, and that split is load-bearing.
+ * They are animated on the same timeline but with different curves, because a
+ * curve that suits arriving somewhere is wrong for spinning. See ARRIVING vs
+ * ARRIVING_SPIN.
  */
 
-/** Landing curves. Constant speed stops dead; the others decelerate in. */
+/**
+ * Curves for travel and scale: decelerate into place.
+ *
+ * Aggressive deceleration is right here. The eye reads position settling, and
+ * a long slow finish looks like care.
+ */
 const ARRIVING: Record<string, string> = {
   linear: 'linear',
   glide: 'cubic-bezier(0.16, 1, 0.3, 1)',
   overshoot: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+}
+
+/**
+ * Curves for rotation. Deliberately far gentler than ARRIVING.
+ *
+ * The eye tracks angular *velocity*, not angle, so an aggressive ease-out on a
+ * multi-turn spin reads as a stall rather than a settle. The glide curve above
+ * completes 87% of its travel in the first 30% of the time — on three turns
+ * that whips through two and a half of them, then creeps the last half-turn
+ * over the remaining second. It looks like the image spins, freezes part-way
+ * round, then starts again.
+ *
+ * These reach roughly two-thirds of the way at the half-way point, so the spin
+ * stays visibly a spin and simply slows to a stop.
+ */
+const ARRIVING_SPIN: Record<string, string> = {
+  linear: 'linear',
+  glide: 'cubic-bezier(0.5, 1, 0.89, 1)',
+  overshoot: 'cubic-bezier(0.34, 1.3, 0.64, 1)',
 }
 
 /**
@@ -33,6 +63,12 @@ const LEAVING: Record<string, string> = {
   linear: 'linear',
   glide: 'cubic-bezier(0.7, 0, 0.84, 0)',
   anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.56)',
+}
+
+const LEAVING_SPIN: Record<string, string> = {
+  linear: 'linear',
+  glide: 'cubic-bezier(0.11, 0, 0.5, 0)',
+  anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.36)',
 }
 
 const PIVOT: Record<string, string> = {
@@ -62,27 +98,31 @@ function safeSrc(src: string): string | null {
   }
 }
 
+type Frame = { offset: number; transform: string; opacity?: number; easing?: string }
+
 export default function SiteImage({
   config,
   replayToken = 0,
 }: {
   config: Partial<EarthConfig>
-  /** Bumping this re-runs the entrance — the tuner's Replay button. */
+  /** Bumping this re-runs the whole timeline — the tuner's Replay button. */
   replayToken?: number
 }) {
   const c = resolveConfig(config)
-  const inner = useRef<HTMLDivElement>(null)
+  const mover = useRef<HTMLDivElement>(null)
+  const spinner = useRef<HTMLDivElement>(null)
   const src = safeSrc(c.imageSrc)
 
   useEffect(() => {
-    const el = inner.current
-    if (!el || !src) return
+    const moveEl = mover.current
+    const spinEl = spinner.current
+    if (!moveEl || !spinEl || !src) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
-    // Arrival, hold and departure are one animation rather than three chained
-    // ones. Chaining leaves a seam: a dropped timer or a slow frame shows up as
-    // a visible stutter between phases, and replaying means cancelling a
-    // half-finished chain. A single timeline cannot get out of step with itself.
+    // Arrival, hold and departure are one timeline rather than three chained
+    // animations. Chaining leaves a seam: a dropped timer or a slow frame shows
+    // up as a stutter between phases, and replaying means cancelling a
+    // half-finished chain. One timeline cannot get out of step with itself.
     const arriveFor = c.fxEnabled ? c.fxDuration : 0
     const holdFor = c.fxExitEnabled ? c.fxHold : 0
     const leaveFor = c.fxExitEnabled ? c.fxExitDuration : 0
@@ -92,94 +132,98 @@ export default function SiteImage({
     const arrived = arriveFor / total
     const leaves = (arriveFor + holdFor) / total
 
-    type Frame = {
-      offset: number
-      transform: string
-      opacity: number
-      easing?: string
-    }
-    const at = (
-      offset: number,
-      rotate: number,
-      scale: number,
-      x: number,
-      y: number,
-      opacity: number,
-      easing?: string,
-    ): Frame => ({
-      offset,
-      transform: `translate(${x}vw, ${y}vh) rotate(${rotate}deg) scale(${scale})`,
-      opacity,
-      easing,
-    })
-    /** Where the image belongs: no offset, upright, full size. */
-    const resting = (offset: number, easing?: string) => at(offset, 0, 1, 0, 0, 1, easing)
-
-    const frames: Frame[] = []
     const arriveEase = ARRIVING[c.fxLanding] ?? ARRIVING.glide
+    const arriveSpinEase = ARRIVING_SPIN[c.fxLanding] ?? ARRIVING_SPIN.glide
     const leaveEase = LEAVING[c.fxExitLeaving] ?? LEAVING.glide
+    const leaveSpinEase = LEAVING_SPIN[c.fxExitLeaving] ?? LEAVING_SPIN.glide
 
+    // Where it comes from, as a delta from where it rests, so the resting
+    // position stays the single source of truth for both.
+    const dx = (c.fxStartX - c.imageX) * 50
+    const dy = -(c.fxStartY - c.imageY) * 50
+    // Starts at -spin and arrives at 0, so a positive count reads clockwise.
+    const spin = c.fxSpins * 360
+    // Drift, not an absolute point: 0 leaves it where it sits rather than
+    // sliding to the middle of the screen on the way out.
+    const ex = c.fxExitDriftX * 50
+    const ey = -c.fxExitDriftY * 50
+    const exitSpin = c.fxExitSpins * 360
+
+    /* --- travel and scale ------------------------------------------------ */
+    const move: Frame[] = []
     if (arriveFor > 0) {
-      // Where it starts, as a delta from where it rests, so the resting
-      // position stays the single source of truth for both.
-      const dx = (c.fxStartX - c.imageX) * 50
-      const dy = -(c.fxStartY - c.imageY) * 50
-      // Starts at -spin and arrives at 0, so a positive count reads clockwise.
-      const spin = c.fxSpins * 360
-
-      frames.push(at(0, -spin, c.fxStartScale, dx, dy, c.fxFade ? 0 : 1, arriveEase))
+      move.push({
+        offset: 0,
+        transform: `translate(${dx}vw, ${dy}vh) scale(${c.fxStartScale})`,
+        opacity: c.fxFade ? 0 : 1,
+        easing: arriveEase,
+      })
       if (c.fxArc > 0) {
         // A lifted midpoint bends the path into a curve instead of a rail.
-        frames.push(
-          at(arrived / 2, -spin / 2, (c.fxStartScale + 1) / 2, dx / 2, dy / 2 - c.fxArc, 1, arriveEase),
-        )
-      }
-      if (c.fxWobble > 0) {
-        // Already home, but rotated slightly past — the next frame rocks it back.
-        frames.push(at(arrived * 0.85, c.fxWobble * (c.fxSpins < 0 ? -1 : 1), 1, 0, 0, 1, arriveEase))
+        move.push({
+          offset: arrived / 2,
+          transform: `translate(${dx / 2}vw, ${dy / 2 - c.fxArc}vh) scale(${(c.fxStartScale + 1) / 2})`,
+          opacity: 1,
+          easing: arriveEase,
+        })
       }
     }
 
     // With no hold, the arrival frame is also the frame the departure starts
-    // from, so it carries the leaving curve instead of a separate one.
-    frames.push(resting(arrived, leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'))
-    if (leaveFor > 0 && holdFor > 0) frames.push(resting(leaves, leaveEase))
-
+    // from, so it carries the leaving curve rather than a separate one.
+    const restEase = leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'
+    move.push({ offset: arrived, transform: 'translate(0vw, 0vh) scale(1)', opacity: 1, easing: restEase })
+    if (leaveFor > 0 && holdFor > 0) {
+      move.push({
+        offset: leaves,
+        transform: 'translate(0vw, 0vh) scale(1)',
+        opacity: 1,
+        easing: leaveEase,
+      })
+    }
     if (leaveFor > 0) {
-      // Drift, not an absolute point: 0 means it leaves from where it sits
-      // rather than sliding to the middle of the screen on its way out.
-      const ex = c.fxExitDriftX * 50
-      const ey = -c.fxExitDriftY * 50
-      const exitSpin = c.fxExitSpins * 360
-
       if (c.fxExitArc !== 0) {
-        frames.push(
-          at(
-            (leaves + 1) / 2,
-            exitSpin / 2,
-            (1 + c.fxExitScale) / 2,
-            ex / 2,
-            ey / 2 - c.fxExitArc,
-            c.fxExitFade ? 0.5 : 1,
-            leaveEase,
-          ),
-        )
+        move.push({
+          offset: (leaves + 1) / 2,
+          transform: `translate(${ex / 2}vw, ${ey / 2 - c.fxExitArc}vh) scale(${(1 + c.fxExitScale) / 2})`,
+          opacity: c.fxExitFade ? 0.5 : 1,
+          easing: leaveEase,
+        })
       }
-      frames.push(at(1, exitSpin, c.fxExitScale, ex, ey, c.fxExitFade ? 0 : 1))
+      move.push({
+        offset: 1,
+        transform: `translate(${ex}vw, ${ey}vh) scale(${c.fxExitScale})`,
+        opacity: c.fxExitFade ? 0 : 1,
+      })
     }
 
-    const animation = el.animate(frames, {
-      duration: total * 1000,
-      delay: c.fxDelay * 1000,
-      // Linear at the effect level so the per-keyframe curves above govern each
-      // segment on its own — otherwise arrival and departure share one curve.
-      easing: 'linear',
-      // `both` holds the start state through the delay and the end state after,
-      // so there is no flash of the final position before it begins.
-      fill: 'both',
-    })
+    /* --- rotation, on its own curves ------------------------------------- */
+    const turn: Frame[] = []
+    if (arriveFor > 0) {
+      turn.push({ offset: 0, transform: `rotate(${-spin}deg)`, easing: arriveSpinEase })
+      if (c.fxWobble > 0) {
+        // Rotated slightly past home; the next frame rocks it back.
+        turn.push({
+          offset: arrived * 0.85,
+          transform: `rotate(${c.fxWobble * (c.fxSpins < 0 ? -1 : 1)}deg)`,
+          easing: arriveSpinEase,
+        })
+      }
+    }
+    const restSpinEase = leaveFor > 0 && holdFor === 0 ? leaveSpinEase : 'linear'
+    turn.push({ offset: arrived, transform: 'rotate(0deg)', easing: restSpinEase })
+    if (leaveFor > 0 && holdFor > 0) {
+      turn.push({ offset: leaves, transform: 'rotate(0deg)', easing: leaveSpinEase })
+    }
+    if (leaveFor > 0) turn.push({ offset: 1, transform: `rotate(${exitSpin}deg)` })
 
-    return () => animation.cancel()
+    // Linear at the effect level so the per-keyframe curves govern each segment
+    // on its own; `both` holds the start state through the delay and the end
+    // state after, so nothing flashes into place before it begins.
+    const timing = { duration: total * 1000, delay: c.fxDelay * 1000, easing: 'linear', fill: 'both' as const }
+    const animations = [moveEl.animate(move, timing), spinEl.animate(turn, timing)]
+
+    return () => animations.forEach((a) => a.cancel())
   }, [
     src,
     replayToken,
@@ -210,6 +254,8 @@ export default function SiteImage({
 
   if (!c.imageShow || !src) return null
 
+  const pivot = PIVOT[c.fxPivot] ?? 'center center'
+
   return (
     <div
       aria-hidden={c.imageAlt ? undefined : true}
@@ -223,21 +269,27 @@ export default function SiteImage({
         pointerEvents: 'none',
       }}
     >
-      <div ref={inner} style={{ transformOrigin: PIVOT[c.fxPivot] ?? 'center center' }}>
-        {/* Plain <img>: the source is an arbitrary URL the user supplies, which
-            next/image cannot optimise without every host being allow-listed. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt={c.imageAlt}
-          style={{
-            display: 'block',
-            width: '100%',
-            height: 'auto',
-            transform: c.imageFlip ? 'scaleX(-1)' : undefined,
-            filter: c.imageGlow > 0 ? `drop-shadow(0 0 ${c.imageGlow}px rgba(255,255,255,0.45))` : undefined,
-          }}
-        />
+      <div ref={mover} style={{ transformOrigin: pivot }}>
+        <div ref={spinner} style={{ transformOrigin: pivot }}>
+          {/* Plain <img>: the source is an arbitrary URL the user supplies,
+              which next/image cannot optimise without allow-listing every
+              possible host. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={c.imageAlt}
+            style={{
+              display: 'block',
+              width: '100%',
+              height: 'auto',
+              transform: c.imageFlip ? 'scaleX(-1)' : undefined,
+              filter:
+                c.imageGlow > 0
+                  ? `drop-shadow(0 0 ${c.imageGlow}px rgba(255,255,255,0.45))`
+                  : undefined,
+            }}
+          />
+        </div>
       </div>
     </div>
   )
