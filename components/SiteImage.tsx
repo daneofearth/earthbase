@@ -6,7 +6,7 @@ import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
 /**
  * The floating image, and its arrival and departure.
  *
- * Three nested elements on purpose.
+ * Two nested elements on purpose.
  *
  * The outer one holds where the picture *lives* — position and size, straight
  * from config. Keeping that separate is what makes the resting state the real
@@ -15,38 +15,29 @@ import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
  * right size. The animation is decoration on top, never the thing that puts it
  * there.
  *
- * The inner two split *travel* from *rotation*, and that split is load-bearing.
- * They are animated on the same timeline but with different curves, because a
- * curve that suits arriving somewhere is wrong for spinning. See ARRIVING vs
- * ARRIVING_SPIN.
+ * The inner one carries every animated property in a single transform, so
+ * growing, travelling and turning cannot finish at different moments. See
+ * ARRIVING for why that matters.
  */
 
 /**
- * Curves for travel and scale: decelerate into place.
+ * One curve per phase, shared by everything that moves.
  *
- * Aggressive deceleration is right here. The eye reads position settling, and
- * a long slow finish looks like care.
+ * An earlier version gave rotation its own, gentler curve to stop a multi-turn
+ * spin appearing to stall. That fixed the stall and introduced a worse problem:
+ * size and rotation then ran on different curves, so the image reached full
+ * size while it was still turning. Two halves of one motion disagreeing is what
+ * reads as jerky. Whatever curve is chosen, growing, travelling and turning
+ * have to finish together.
+ *
+ * The curves themselves are also moderate now. The old default completed 87% of
+ * its travel in the first 30% of the time — fine for a short slide, but on
+ * three turns it whipped through two and a half of them and then crept the last
+ * half-turn over a full second. These reach roughly two thirds of the way at
+ * the half-way point, so motion stays visible for the whole duration instead of
+ * front-loading and trailing off.
  */
 const ARRIVING: Record<string, string> = {
-  linear: 'linear',
-  glide: 'cubic-bezier(0.16, 1, 0.3, 1)',
-  overshoot: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
-}
-
-/**
- * Curves for rotation. Deliberately far gentler than ARRIVING.
- *
- * The eye tracks angular *velocity*, not angle, so an aggressive ease-out on a
- * multi-turn spin reads as a stall rather than a settle. The glide curve above
- * completes 87% of its travel in the first 30% of the time — on three turns
- * that whips through two and a half of them, then creeps the last half-turn
- * over the remaining second. It looks like the image spins, freezes part-way
- * round, then starts again.
- *
- * These reach roughly two-thirds of the way at the half-way point, so the spin
- * stays visibly a spin and simply slows to a stop.
- */
-const ARRIVING_SPIN: Record<string, string> = {
   linear: 'linear',
   glide: 'cubic-bezier(0.5, 1, 0.89, 1)',
   overshoot: 'cubic-bezier(0.34, 1.3, 0.64, 1)',
@@ -60,12 +51,6 @@ const ARRIVING_SPIN: Record<string, string> = {
  * rather than leaving.
  */
 const LEAVING: Record<string, string> = {
-  linear: 'linear',
-  glide: 'cubic-bezier(0.7, 0, 0.84, 0)',
-  anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.56)',
-}
-
-const LEAVING_SPIN: Record<string, string> = {
   linear: 'linear',
   glide: 'cubic-bezier(0.11, 0, 0.5, 0)',
   anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.36)',
@@ -109,14 +94,12 @@ export default function SiteImage({
   replayToken?: number
 }) {
   const c = resolveConfig(config)
-  const mover = useRef<HTMLDivElement>(null)
-  const spinner = useRef<HTMLDivElement>(null)
+  const stage = useRef<HTMLDivElement>(null)
   const src = safeSrc(c.imageSrc)
 
   useEffect(() => {
-    const moveEl = mover.current
-    const spinEl = spinner.current
-    if (!moveEl || !spinEl || !src) return
+    const el = stage.current
+    if (!el || !src) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
     // Arrival, hold and departure are one timeline rather than three chained
@@ -132,10 +115,8 @@ export default function SiteImage({
     const arrived = arriveFor / total
     const leaves = (arriveFor + holdFor) / total
 
-    const arriveEase = ARRIVING[c.fxLanding] ?? ARRIVING.glide
-    const arriveSpinEase = ARRIVING_SPIN[c.fxLanding] ?? ARRIVING_SPIN.glide
-    const leaveEase = LEAVING[c.fxExitLeaving] ?? LEAVING.glide
-    const leaveSpinEase = LEAVING_SPIN[c.fxExitLeaving] ?? LEAVING_SPIN.glide
+    const arriveEase = ARRIVING[c.fxLanding] ?? ARRIVING.linear
+    const leaveEase = LEAVING[c.fxExitLeaving] ?? LEAVING.linear
 
     // Where it comes from, as a delta from where it rests, so the resting
     // position stays the single source of truth for both.
@@ -149,20 +130,38 @@ export default function SiteImage({
     const ey = -c.fxExitDriftY * 50
     const exitSpin = c.fxExitSpins * 360
 
-    /* --- travel and scale ------------------------------------------------ */
-    const move: Frame[] = []
+    // One list, one transform, one curve per segment. Everything that moves is
+    // in here together, which is the only way growing, travelling and turning
+    // can be guaranteed to finish at the same instant.
+    const frames: Frame[] = []
+    const rest = (offset: number, easing?: string): Frame => ({
+      offset,
+      transform: 'translate(0vw, 0vh) rotate(0deg) scale(1)',
+      opacity: 1,
+      easing,
+    })
+
     if (arriveFor > 0) {
-      move.push({
+      frames.push({
         offset: 0,
-        transform: `translate(${dx}vw, ${dy}vh) scale(${c.fxStartScale})`,
+        transform: `translate(${dx}vw, ${dy}vh) rotate(${-spin}deg) scale(${c.fxStartScale})`,
         opacity: c.fxFade ? 0 : 1,
         easing: arriveEase,
       })
       if (c.fxArc > 0) {
         // A lifted midpoint bends the path into a curve instead of a rail.
-        move.push({
+        frames.push({
           offset: arrived / 2,
-          transform: `translate(${dx / 2}vw, ${dy / 2 - c.fxArc}vh) scale(${(c.fxStartScale + 1) / 2})`,
+          transform: `translate(${dx / 2}vw, ${dy / 2 - c.fxArc}vh) rotate(${-spin / 2}deg) scale(${(c.fxStartScale + 1) / 2})`,
+          opacity: 1,
+          easing: arriveEase,
+        })
+      }
+      if (c.fxWobble > 0) {
+        // Home, but rotated slightly past; the next frame rocks it back.
+        frames.push({
+          offset: arrived * 0.85,
+          transform: `translate(0vw, 0vh) rotate(${c.fxWobble * (c.fxSpins < 0 ? -1 : 1)}deg) scale(1)`,
           opacity: 1,
           easing: arriveEase,
         })
@@ -171,59 +170,36 @@ export default function SiteImage({
 
     // With no hold, the arrival frame is also the frame the departure starts
     // from, so it carries the leaving curve rather than a separate one.
-    const restEase = leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'
-    move.push({ offset: arrived, transform: 'translate(0vw, 0vh) scale(1)', opacity: 1, easing: restEase })
-    if (leaveFor > 0 && holdFor > 0) {
-      move.push({
-        offset: leaves,
-        transform: 'translate(0vw, 0vh) scale(1)',
-        opacity: 1,
-        easing: leaveEase,
-      })
-    }
+    frames.push(rest(arrived, leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'))
+    if (leaveFor > 0 && holdFor > 0) frames.push(rest(leaves, leaveEase))
+
     if (leaveFor > 0) {
       if (c.fxExitArc !== 0) {
-        move.push({
+        frames.push({
           offset: (leaves + 1) / 2,
-          transform: `translate(${ex / 2}vw, ${ey / 2 - c.fxExitArc}vh) scale(${(1 + c.fxExitScale) / 2})`,
+          transform: `translate(${ex / 2}vw, ${ey / 2 - c.fxExitArc}vh) rotate(${exitSpin / 2}deg) scale(${(1 + c.fxExitScale) / 2})`,
           opacity: c.fxExitFade ? 0.5 : 1,
           easing: leaveEase,
         })
       }
-      move.push({
+      frames.push({
         offset: 1,
-        transform: `translate(${ex}vw, ${ey}vh) scale(${c.fxExitScale})`,
+        transform: `translate(${ex}vw, ${ey}vh) rotate(${exitSpin}deg) scale(${c.fxExitScale})`,
         opacity: c.fxExitFade ? 0 : 1,
       })
     }
 
-    /* --- rotation, on its own curves ------------------------------------- */
-    const turn: Frame[] = []
-    if (arriveFor > 0) {
-      turn.push({ offset: 0, transform: `rotate(${-spin}deg)`, easing: arriveSpinEase })
-      if (c.fxWobble > 0) {
-        // Rotated slightly past home; the next frame rocks it back.
-        turn.push({
-          offset: arrived * 0.85,
-          transform: `rotate(${c.fxWobble * (c.fxSpins < 0 ? -1 : 1)}deg)`,
-          easing: arriveSpinEase,
-        })
-      }
-    }
-    const restSpinEase = leaveFor > 0 && holdFor === 0 ? leaveSpinEase : 'linear'
-    turn.push({ offset: arrived, transform: 'rotate(0deg)', easing: restSpinEase })
-    if (leaveFor > 0 && holdFor > 0) {
-      turn.push({ offset: leaves, transform: 'rotate(0deg)', easing: leaveSpinEase })
-    }
-    if (leaveFor > 0) turn.push({ offset: 1, transform: `rotate(${exitSpin}deg)` })
-
     // Linear at the effect level so the per-keyframe curves govern each segment
     // on its own; `both` holds the start state through the delay and the end
     // state after, so nothing flashes into place before it begins.
-    const timing = { duration: total * 1000, delay: c.fxDelay * 1000, easing: 'linear', fill: 'both' as const }
-    const animations = [moveEl.animate(move, timing), spinEl.animate(turn, timing)]
+    const animation = el.animate(frames, {
+      duration: total * 1000,
+      delay: c.fxDelay * 1000,
+      easing: 'linear',
+      fill: 'both',
+    })
 
-    return () => animations.forEach((a) => a.cancel())
+    return () => animation.cancel()
   }, [
     src,
     replayToken,
@@ -269,27 +245,25 @@ export default function SiteImage({
         pointerEvents: 'none',
       }}
     >
-      <div ref={mover} style={{ transformOrigin: pivot }}>
-        <div ref={spinner} style={{ transformOrigin: pivot }}>
-          {/* Plain <img>: the source is an arbitrary URL the user supplies,
-              which next/image cannot optimise without allow-listing every
-              possible host. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={src}
-            alt={c.imageAlt}
-            style={{
-              display: 'block',
-              width: '100%',
-              height: 'auto',
-              transform: c.imageFlip ? 'scaleX(-1)' : undefined,
-              filter:
-                c.imageGlow > 0
-                  ? `drop-shadow(0 0 ${c.imageGlow}px rgba(255,255,255,0.45))`
-                  : undefined,
-            }}
-          />
-        </div>
+      <div ref={stage} style={{ transformOrigin: pivot }}>
+        {/* Plain <img>: the source is an arbitrary URL the user supplies, which
+            next/image cannot optimise without allow-listing every possible
+            host. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={c.imageAlt}
+          style={{
+            display: 'block',
+            width: '100%',
+            height: 'auto',
+            transform: c.imageFlip ? 'scaleX(-1)' : undefined,
+            filter:
+              c.imageGlow > 0
+                ? `drop-shadow(0 0 ${c.imageGlow}px rgba(255,255,255,0.45))`
+                : undefined,
+          }}
+        />
       </div>
     </div>
   )

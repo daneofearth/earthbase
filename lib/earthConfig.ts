@@ -200,7 +200,9 @@ export const DEFAULTS: EarthConfig = {
   fxStartScale: 0,
   fxStartX: 0,
   fxStartY: 0,
-  fxLanding: 'glide',
+  // Linear by default: an even rate is predictable and never looks like it
+  // hesitates. The eased options are there when a softer stop is wanted.
+  fxLanding: 'linear',
   fxFade: true,
   fxPivot: 'center',
   fxArc: 0,
@@ -846,7 +848,7 @@ export const PARAMS: ParamDef[] = [
     group: 'Entrance',
     kind: 'select',
     options: ['linear', 'glide', 'overshoot'],
-    hint: 'Constant speed stops dead and reads mechanical. Glide decelerates into place. Overshoot goes slightly past and settles.',
+    hint: 'Applies to growing, travelling and turning together — they always finish at the same instant. Linear is an even rate throughout. Glide slows toward the end. Overshoot goes slightly past and settles back.',
   },
   {
     key: 'fxFade',
