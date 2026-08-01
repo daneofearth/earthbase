@@ -106,6 +106,18 @@ export type EarthConfig = {
   fxPivot: string
   fxArc: number
   fxWobble: number
+
+  // Exit — how it leaves, after holding
+  fxExitEnabled: boolean
+  fxHold: number
+  fxExitDuration: number
+  fxExitFade: boolean
+  fxExitScale: number
+  fxExitSpins: number
+  fxExitDriftX: number
+  fxExitDriftY: number
+  fxExitLeaving: string
+  fxExitArc: number
 }
 
 export const DEFAULTS: EarthConfig = {
@@ -193,6 +205,19 @@ export const DEFAULTS: EarthConfig = {
   fxPivot: 'center',
   fxArc: 0,
   fxWobble: 0,
+
+  // Off by default. Anything already saved and live would otherwise start
+  // making its image disappear the moment this shipped.
+  fxExitEnabled: false,
+  fxHold: 4,
+  fxExitDuration: 1.2,
+  fxExitFade: true,
+  fxExitScale: 1,
+  fxExitSpins: 0,
+  fxExitDriftX: 0,
+  fxExitDriftY: 0,
+  fxExitLeaving: 'glide',
+  fxExitArc: 0,
 }
 
 export const TABS = ['Earth', 'Text', 'Effects'] as const
@@ -202,7 +227,7 @@ export type Tab = (typeof TABS)[number]
 export const GROUPS: Record<Tab, readonly string[]> = {
   Earth: ['Motion', 'Framing', 'Orientation', 'Light', 'Atmosphere', 'Clouds', 'Stars', 'Overlay'],
   Text: ['Layout', 'Title', 'Subtitle', 'Description'],
-  Effects: ['Image', 'Entrance'],
+  Effects: ['Image', 'Entrance', 'Exit'],
 }
 
 type Base = { key: keyof EarthConfig; label: string; tab: Tab; group: string; hint?: string }
@@ -862,6 +887,125 @@ export const PARAMS: ParamDef[] = [
     step: 1,
     unit: '°',
     hint: 'A small over-rotation near the end that rocks back, as though it overshot and corrected.',
+  },
+
+  /* ---- Exit
+   *
+   * Nearly a mirror of Entrance, with three deliberate differences.
+   *
+   * Position is a *drift* from where the image rests, not an absolute point, so
+   * 0 means "stays put" — otherwise a plain fade-out would slide to the middle
+   * of the screen on its way, which is never what anyone wants.
+   *
+   * The curves are inverted. An entrance decelerates into place; an exit
+   * accelerates away. Reusing the entrance curves would make the image crawl
+   * out, which reads as hesitation rather than departure.
+   *
+   * There is no settle, because nothing settles on the way out, and the pivot
+   * is shared with Entrance — changing it mid-flight would visibly jump.
+   */
+  {
+    key: 'fxExitEnabled',
+    label: 'Leave after a while',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'toggle',
+    hint: 'Off leaves the image on screen for good. Visitors who ask for reduced motion always get that version.',
+  },
+  {
+    key: 'fxHold',
+    label: 'Hold before leaving',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: 0,
+    max: 30,
+    step: 0.1,
+    unit: 's',
+    hint: 'Time it stays put after arriving. Measured from the end of the entrance, so changing the entrance does not shift it.',
+  },
+  {
+    key: 'fxExitDuration',
+    label: 'Duration',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: 0.2,
+    max: 6,
+    step: 0.05,
+    unit: 's',
+  },
+  {
+    key: 'fxExitFade',
+    label: 'Fade out',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'toggle',
+    hint: 'On its own — no spin, no drift, ending size 1 — this is a plain fade out.',
+  },
+  {
+    key: 'fxExitScale',
+    label: 'Ending size',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: 0,
+    max: 2,
+    step: 0.01,
+    unit: '×',
+    hint: 'A multiple of its normal size. 1 keeps it the same on the way out; 0 shrinks it to nothing.',
+  },
+  {
+    key: 'fxExitSpins',
+    label: 'Rotations',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: -8,
+    max: 8,
+    step: 0.25,
+    hint: 'Full turns on the way out. Negative spins the other way.',
+  },
+  {
+    key: 'fxExitDriftX',
+    label: 'Horizontal drift',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: -2,
+    max: 2,
+    step: 0.01,
+    hint: 'How far it travels as it leaves, from wherever it was sitting. 0 stays in place.',
+  },
+  {
+    key: 'fxExitDriftY',
+    label: 'Vertical drift',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: -2,
+    max: 2,
+    step: 0.01,
+  },
+  {
+    key: 'fxExitLeaving',
+    label: 'Leaving',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'select',
+    options: ['linear', 'glide', 'anticipate'],
+    hint: 'Glide starts slowly and accelerates away. Anticipate pulls back a little first, like a wind-up.',
+  },
+  {
+    key: 'fxExitArc',
+    label: 'Arc',
+    tab: 'Effects',
+    group: 'Exit',
+    kind: 'range',
+    min: -50,
+    max: 50,
+    step: 1,
+    hint: 'Bends the departure path. Positive lifts it, negative dips it.',
   },
 ]
 

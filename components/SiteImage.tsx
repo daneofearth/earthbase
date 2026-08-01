@@ -15,11 +15,24 @@ import { resolveConfig, type EarthConfig } from '@/lib/earthConfig'
  * the thing that puts it there.
  */
 
-/** Landing curves. Constant speed stops dead; the others decelerate. */
-const EASING: Record<string, string> = {
+/** Landing curves. Constant speed stops dead; the others decelerate in. */
+const ARRIVING: Record<string, string> = {
   linear: 'linear',
   glide: 'cubic-bezier(0.16, 1, 0.3, 1)',
   overshoot: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+}
+
+/**
+ * Departure curves — the mirror images.
+ *
+ * An arrival decelerates into place; a departure accelerates away. Reusing the
+ * arrival curves would make the image crawl out, which reads as hesitation
+ * rather than leaving.
+ */
+const LEAVING: Record<string, string> = {
+  linear: 'linear',
+  glide: 'cubic-bezier(0.7, 0, 0.84, 0)',
+  anticipate: 'cubic-bezier(0.36, 0, 0.66, -0.56)',
 }
 
 const PIVOT: Record<string, string> = {
@@ -63,37 +76,104 @@ export default function SiteImage({
 
   useEffect(() => {
     const el = inner.current
-    if (!el || !src || !c.fxEnabled) return
+    if (!el || !src) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
-    // Where it starts, expressed as a delta from where it rests, so the resting
-    // position stays the single source of truth for both.
-    const dx = (c.fxStartX - c.imageX) * 50
-    const dy = -(c.fxStartY - c.imageY) * 50
-    // Starts at -spin and arrives at 0, so a positive count reads clockwise.
-    const spin = c.fxSpins * 360
-    const at = (t: number, r: number, s: number, x: number, y: number, o: number) => ({
-      offset: t,
-      transform: `translate(${x}vw, ${y}vh) rotate(${r}deg) scale(${s})`,
-      opacity: o,
+    // Arrival, hold and departure are one animation rather than three chained
+    // ones. Chaining leaves a seam: a dropped timer or a slow frame shows up as
+    // a visible stutter between phases, and replaying means cancelling a
+    // half-finished chain. A single timeline cannot get out of step with itself.
+    const arriveFor = c.fxEnabled ? c.fxDuration : 0
+    const holdFor = c.fxExitEnabled ? c.fxHold : 0
+    const leaveFor = c.fxExitEnabled ? c.fxExitDuration : 0
+    const total = arriveFor + holdFor + leaveFor
+    if (total <= 0) return
+
+    const arrived = arriveFor / total
+    const leaves = (arriveFor + holdFor) / total
+
+    type Frame = {
+      offset: number
+      transform: string
+      opacity: number
+      easing?: string
+    }
+    const at = (
+      offset: number,
+      rotate: number,
+      scale: number,
+      x: number,
+      y: number,
+      opacity: number,
+      easing?: string,
+    ): Frame => ({
+      offset,
+      transform: `translate(${x}vw, ${y}vh) rotate(${rotate}deg) scale(${scale})`,
+      opacity,
+      easing,
     })
+    /** Where the image belongs: no offset, upright, full size. */
+    const resting = (offset: number, easing?: string) => at(offset, 0, 1, 0, 0, 1, easing)
 
-    const frames = [at(0, -spin, c.fxStartScale, dx, dy, c.fxFade ? 0 : 1)]
+    const frames: Frame[] = []
+    const arriveEase = ARRIVING[c.fxLanding] ?? ARRIVING.glide
+    const leaveEase = LEAVING[c.fxExitLeaving] ?? LEAVING.glide
 
-    if (c.fxArc > 0) {
-      // A lifted midpoint bends the path into a curve instead of a rail.
-      frames.push(at(0.5, -spin / 2, (c.fxStartScale + 1) / 2, dx / 2, dy / 2 - c.fxArc, 1))
+    if (arriveFor > 0) {
+      // Where it starts, as a delta from where it rests, so the resting
+      // position stays the single source of truth for both.
+      const dx = (c.fxStartX - c.imageX) * 50
+      const dy = -(c.fxStartY - c.imageY) * 50
+      // Starts at -spin and arrives at 0, so a positive count reads clockwise.
+      const spin = c.fxSpins * 360
+
+      frames.push(at(0, -spin, c.fxStartScale, dx, dy, c.fxFade ? 0 : 1, arriveEase))
+      if (c.fxArc > 0) {
+        // A lifted midpoint bends the path into a curve instead of a rail.
+        frames.push(
+          at(arrived / 2, -spin / 2, (c.fxStartScale + 1) / 2, dx / 2, dy / 2 - c.fxArc, 1, arriveEase),
+        )
+      }
+      if (c.fxWobble > 0) {
+        // Already home, but rotated slightly past — the next frame rocks it back.
+        frames.push(at(arrived * 0.85, c.fxWobble * (c.fxSpins < 0 ? -1 : 1), 1, 0, 0, 1, arriveEase))
+      }
     }
-    if (c.fxWobble > 0) {
-      // Already home, but rotated slightly past — the last frame rocks it back.
-      frames.push(at(0.85, c.fxWobble * (c.fxSpins < 0 ? -1 : 1), 1, 0, 0, 1))
+
+    // With no hold, the arrival frame is also the frame the departure starts
+    // from, so it carries the leaving curve instead of a separate one.
+    frames.push(resting(arrived, leaveFor > 0 && holdFor === 0 ? leaveEase : 'linear'))
+    if (leaveFor > 0 && holdFor > 0) frames.push(resting(leaves, leaveEase))
+
+    if (leaveFor > 0) {
+      // Drift, not an absolute point: 0 means it leaves from where it sits
+      // rather than sliding to the middle of the screen on its way out.
+      const ex = c.fxExitDriftX * 50
+      const ey = -c.fxExitDriftY * 50
+      const exitSpin = c.fxExitSpins * 360
+
+      if (c.fxExitArc !== 0) {
+        frames.push(
+          at(
+            (leaves + 1) / 2,
+            exitSpin / 2,
+            (1 + c.fxExitScale) / 2,
+            ex / 2,
+            ey / 2 - c.fxExitArc,
+            c.fxExitFade ? 0.5 : 1,
+            leaveEase,
+          ),
+        )
+      }
+      frames.push(at(1, exitSpin, c.fxExitScale, ex, ey, c.fxExitFade ? 0 : 1))
     }
-    frames.push(at(1, 0, 1, 0, 0, 1))
 
     const animation = el.animate(frames, {
-      duration: c.fxDuration * 1000,
+      duration: total * 1000,
       delay: c.fxDelay * 1000,
-      easing: EASING[c.fxLanding] ?? EASING.glide,
+      // Linear at the effect level so the per-keyframe curves above govern each
+      // segment on its own — otherwise arrival and departure share one curve.
+      easing: 'linear',
       // `both` holds the start state through the delay and the end state after,
       // so there is no flash of the final position before it begins.
       fill: 'both',
@@ -116,6 +196,16 @@ export default function SiteImage({
     c.fxWobble,
     c.imageX,
     c.imageY,
+    c.fxExitEnabled,
+    c.fxHold,
+    c.fxExitDuration,
+    c.fxExitFade,
+    c.fxExitScale,
+    c.fxExitSpins,
+    c.fxExitDriftX,
+    c.fxExitDriftY,
+    c.fxExitLeaving,
+    c.fxExitArc,
   ])
 
   if (!c.imageShow || !src) return null
