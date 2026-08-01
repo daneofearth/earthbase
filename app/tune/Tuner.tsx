@@ -49,6 +49,9 @@ export default function Tuner({
   const [presets, setPresets] = useState<Preset[]>(initialPresets)
   const [activeSlug, setActiveSlug] = useState<string | null>(initialActive)
   const [name, setName] = useState('')
+  // The last state that was written to storage, so the screen can say plainly
+  // whether what you are looking at has been kept or not.
+  const [saved, setSaved] = useState<EarthConfig>(initial)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<Tab>('Earth')
@@ -73,8 +76,16 @@ export default function Tuner({
     setBusy(false)
     if (!res.ok) return setStatus(data.error ?? 'Save failed.')
     setPresets(data.presets)
-    setName('')
-    setStatus(`Saved “${data.saved.name}”.`)
+    // The name is kept, not cleared. Saving again is the normal way to keep
+    // working on a look, and clearing it forced you to retype the exact name
+    // to update what you had just saved.
+    setName(data.saved.name)
+    setSaved(data.saved.values)
+    setStatus(
+      activeSlug === data.saved.slug && live
+        ? `Saved “${data.saved.name}” — it is the live look, so the site is updated.`
+        : `Saved “${data.saved.name}”.`,
+    )
   }
 
   async function makeActive(slug: string | null) {
@@ -112,6 +123,7 @@ export default function Tuner({
   }
 
   const dirtyCount = PARAMS.filter((p) => values[p.key] !== DEFAULTS[p.key]).length
+  const unsaved = PARAMS.some((p) => values[p.key] !== saved[p.key])
 
   return (
     // No background colour here on purpose. EarthBackground sits at -z-10, and
@@ -160,9 +172,15 @@ export default function Tuner({
               })}
             </nav>
             <p className="px-4 pb-3 text-xs text-white/50">
-              {dirtyCount === 0
-                ? 'Matching the built-in defaults.'
-                : `${dirtyCount} changed from defaults.`}
+              {unsaved ? (
+                <span className="text-amber-400">Unsaved changes — Save is on the right →</span>
+              ) : (
+                <>
+                  {dirtyCount === 0
+                    ? 'Matching the built-in defaults.'
+                    : `${dirtyCount} changed from defaults.`}
+                </>
+              )}
             </p>
           </header>
 
@@ -209,9 +227,11 @@ export default function Tuner({
             </p>
           </header>
 
-          <div className="border-b border-white/10 px-4 py-3">
+          <div
+            className={`border-b border-white/10 px-4 py-3 ${unsaved ? 'bg-amber-400/10' : ''}`}
+          >
             <label className="block text-xs text-white/60" htmlFor="preset-name">
-              Save the current settings as
+              {unsaved ? 'You have unsaved changes. Save them as' : 'Save the current settings as'}
             </label>
             <div className="mt-2 flex gap-2">
               <input
@@ -231,7 +251,8 @@ export default function Tuner({
               </button>
             </div>
             <p className="mt-2 text-xs text-white/35">
-              Reusing a name overwrites that look.
+              Reusing a name overwrites that look. Saving over the live one
+              {live ? ' updates the site immediately.' : ' takes effect on the next deploy.'}
             </p>
           </div>
 
@@ -247,6 +268,10 @@ export default function Tuner({
                   <button
                     onClick={() => {
                       setValues(preset.values)
+                      setSaved(preset.values)
+                      // Prefilled so Save updates this look rather than
+                      // silently creating a second one under a new name.
+                      setName(preset.name)
                       setStatus(`Loaded “${preset.name}”.`)
                     }}
                     className="min-w-0 flex-1 text-left"
