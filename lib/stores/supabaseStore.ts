@@ -24,6 +24,11 @@ export function supabaseConfigured(): boolean {
 
 let client: SupabaseClient | null = null
 
+/** The service-role client. Server-side only — this key bypasses RLS. */
+export function serviceClient(): SupabaseClient {
+  return db()
+}
+
 function db(): SupabaseClient {
   if (!client) {
     client = createClient(

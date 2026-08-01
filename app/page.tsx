@@ -1,4 +1,5 @@
 import EarthBackground from "@/components/earth/EarthBackground";
+import SiteImage from "@/components/SiteImage";
 import SiteText from "@/components/SiteText";
 import { getActiveConfig } from "@/lib/earthConfigStore";
 
@@ -16,6 +17,8 @@ export default async function Home() {
     // positioned, so without a positioned ancestor they escape to the body.
     <section className="relative flex min-h-screen flex-1 overflow-hidden">
       <EarthBackground config={config} />
+      {/* Before the text in the DOM, so the headline stays on top of it. */}
+      <SiteImage config={config} />
       <SiteText config={config} />
     </section>
   );

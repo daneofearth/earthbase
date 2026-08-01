@@ -81,6 +81,31 @@ export type EarthConfig = {
   descriptionColor: string
   descriptionGap: number
   descriptionLineHeight: number
+
+  // Image — the element itself, and where it comes to rest
+  imageShow: boolean
+  imageSrc: string
+  imageAlt: string
+  imageWidth: number
+  imageX: number
+  imageY: number
+  imageOpacity: number
+  imageFlip: boolean
+  imageGlow: number
+
+  // Entrance — a one-shot arrival, not a loop
+  fxEnabled: boolean
+  fxDuration: number
+  fxDelay: number
+  fxSpins: number
+  fxStartScale: number
+  fxStartX: number
+  fxStartY: number
+  fxLanding: string
+  fxFade: boolean
+  fxPivot: string
+  fxArc: number
+  fxWobble: number
 }
 
 export const DEFAULTS: EarthConfig = {
@@ -144,6 +169,30 @@ export const DEFAULTS: EarthConfig = {
   descriptionColor: '#808080',
   descriptionGap: 2.5,
   descriptionLineHeight: 1.6,
+
+  imageShow: true,
+  imageSrc: '',
+  imageAlt: '',
+  imageWidth: 26,
+  imageX: -0.55,
+  // Negative is down: the lower-left corner, where the half-body shot goes.
+  imageY: -0.45,
+  imageOpacity: 1,
+  imageFlip: false,
+  imageGlow: 0,
+
+  fxEnabled: true,
+  fxDuration: 1.4,
+  fxDelay: 0.4,
+  fxSpins: 3,
+  fxStartScale: 0,
+  fxStartX: 0,
+  fxStartY: 0,
+  fxLanding: 'glide',
+  fxFade: true,
+  fxPivot: 'center',
+  fxArc: 0,
+  fxWobble: 0,
 }
 
 export const TABS = ['Earth', 'Text', 'Effects'] as const
@@ -153,7 +202,7 @@ export type Tab = (typeof TABS)[number]
 export const GROUPS: Record<Tab, readonly string[]> = {
   Earth: ['Motion', 'Framing', 'Orientation', 'Light', 'Atmosphere', 'Clouds', 'Stars', 'Overlay'],
   Text: ['Layout', 'Title', 'Subtitle', 'Description'],
-  Effects: [],
+  Effects: ['Image', 'Entrance'],
 }
 
 type Base = { key: keyof EarthConfig; label: string; tab: Tab; group: string; hint?: string }
@@ -164,6 +213,8 @@ export type ParamDef =
   | (Base & { kind: 'color' })
   | (Base & { kind: 'text'; maxLength: number; multiline?: boolean; placeholder?: string })
   | (Base & { kind: 'select'; options: readonly string[] })
+  /** A URL plus an upload button that fills it in. */
+  | (Base & { kind: 'image'; maxLength: number; placeholder?: string })
 
 export const PARAMS: ParamDef[] = [
   // ---- Motion
@@ -595,6 +646,223 @@ export const PARAMS: ParamDef[] = [
     step: 0.05,
     hint: 'Only shows up once the text wraps to more than one line.',
   },
+
+  /* ================================================================== Effects
+   *
+   * Normie's effects are all infinite loops at constant speed — ambient motion.
+   * This is the other kind: a one-shot arrival that lands and stops. Entrances
+   * need controls loops do not, and nearly all of them are about how it lands.
+   *
+   * The Image values are where the picture *lives*. The Entrance values only
+   * describe how it gets there. If the animation never runs — reduced motion,
+   * an old browser, a script that failed — the picture is still exactly where
+   * it belongs, at the right size.
+   */
+
+  // ---- Image
+  { key: 'imageShow', label: 'Show image', tab: 'Effects', group: 'Image', kind: 'toggle' },
+  {
+    key: 'imageSrc',
+    label: 'Image',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'image',
+    maxLength: 500,
+    placeholder: 'Paste a URL, or upload',
+    hint: 'A cut-out PNG with a transparent background sits best over the globe.',
+  },
+  {
+    key: 'imageAlt',
+    label: 'Description for screen readers',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'text',
+    maxLength: 200,
+    placeholder: 'Dane, waist up',
+    hint: 'Leave empty if the image is purely decorative — that tells a screen reader to skip it rather than read out a filename.',
+  },
+  {
+    key: 'imageWidth',
+    label: 'Width',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'range',
+    min: 4,
+    max: 90,
+    step: 0.5,
+    unit: '%',
+    hint: 'Share of the screen width, so it holds its proportions on a phone.',
+  },
+  {
+    key: 'imageX',
+    label: 'Horizontal position',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'range',
+    min: -1.2,
+    max: 1.2,
+    step: 0.01,
+  },
+  {
+    key: 'imageY',
+    label: 'Vertical position',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'range',
+    min: -1.2,
+    max: 1.2,
+    step: 0.01,
+    hint: 'Negative is down. Past 1 the image hangs off the edge, which is how you crop a half-body shot at the bottom.',
+  },
+  {
+    key: 'imageOpacity',
+    label: 'Opacity',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'range',
+    min: 0,
+    max: 1,
+    step: 0.01,
+  },
+  { key: 'imageFlip', label: 'Flip horizontally', tab: 'Effects', group: 'Image', kind: 'toggle' },
+  {
+    key: 'imageGlow',
+    label: 'Glow',
+    tab: 'Effects',
+    group: 'Image',
+    kind: 'range',
+    min: 0,
+    max: 60,
+    step: 1,
+    unit: 'px',
+    hint: 'A soft halo. A cut-out on black usually needs a little or it looks pasted on.',
+  },
+
+  // ---- Entrance
+  {
+    key: 'fxEnabled',
+    label: 'Spin in on load',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'toggle',
+    hint: 'Off leaves the image simply present. Visitors who ask for reduced motion always get that version.',
+  },
+  {
+    key: 'fxDuration',
+    label: 'Duration',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: 0.2,
+    max: 6,
+    step: 0.05,
+    unit: 's',
+  },
+  {
+    key: 'fxDelay',
+    label: 'Delay',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: 0,
+    max: 5,
+    step: 0.05,
+    unit: 's',
+    hint: 'Wait before it starts. This is what lets the image arrive after the globe has faded in, instead of everything happening at once.',
+  },
+  {
+    key: 'fxSpins',
+    label: 'Rotations',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: -8,
+    max: 8,
+    step: 0.25,
+    hint: 'Full turns on the way in. Negative spins the other way.',
+  },
+  {
+    key: 'fxStartScale',
+    label: 'Starting size',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: 0,
+    max: 2,
+    step: 0.01,
+    unit: '×',
+    hint: 'As a multiple of the final size. 0 grows it out of nothing; above 1 shrinks it into place.',
+  },
+  {
+    key: 'fxStartX',
+    label: 'Starting horizontal',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: -2,
+    max: 2,
+    step: 0.01,
+    hint: 'Where it comes from, in the same scale as the image position. Beyond ±1 it starts off screen.',
+  },
+  {
+    key: 'fxStartY',
+    label: 'Starting vertical',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: -2,
+    max: 2,
+    step: 0.01,
+  },
+  {
+    key: 'fxLanding',
+    label: 'Landing',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'select',
+    options: ['linear', 'glide', 'overshoot'],
+    hint: 'Constant speed stops dead and reads mechanical. Glide decelerates into place. Overshoot goes slightly past and settles.',
+  },
+  {
+    key: 'fxFade',
+    label: 'Fade in',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'toggle',
+    hint: 'Something growing from nothing looks like a glitch without this.',
+  },
+  {
+    key: 'fxPivot',
+    label: 'Spins around its',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'select',
+    options: ['center', 'bottom', 'top', 'left', 'right'],
+    hint: 'Same numbers, completely different effect: turning about the feet reads as a cartwheel, about the middle as a pinwheel.',
+  },
+  {
+    key: 'fxArc',
+    label: 'Arc',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: 0,
+    max: 50,
+    step: 1,
+    hint: 'Lifts the midpoint of the path so it curves in rather than running along a rail. 0 is a straight line.',
+  },
+  {
+    key: 'fxWobble',
+    label: 'Settle',
+    tab: 'Effects',
+    group: 'Entrance',
+    kind: 'range',
+    min: 0,
+    max: 30,
+    step: 1,
+    unit: '°',
+    hint: 'A small over-rotation near the end that rocks back, as though it overshot and corrected.',
+  },
 ]
 
 const PARAM_BY_KEY = new Map(PARAMS.map((p) => [p.key, p]))
@@ -622,7 +890,7 @@ export function resolveConfig(saved: unknown): EarthConfig {
       ;(out[def.key] as boolean) = value
     } else if (def.kind === 'color' && typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
       ;(out[def.key] as string) = value
-    } else if (def.kind === 'text' && typeof value === 'string') {
+    } else if ((def.kind === 'text' || def.kind === 'image') && typeof value === 'string') {
       // Truncated rather than rejected: a too-long string is someone pasting an
       // essay, not an attack, and silently dropping their text would be worse.
       // It is rendered as text content, never as HTML, so there is nothing to

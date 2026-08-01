@@ -11,6 +11,7 @@
 
 import { useCallback, useState } from 'react'
 import EarthBackground from '@/components/earth/EarthBackground'
+import SiteImage from '@/components/SiteImage'
 import SiteText from '@/components/SiteText'
 import {
   DEFAULTS,
@@ -59,6 +60,9 @@ export default function Tuner({
   // where the text position controls put the text. Without a way to get them
   // out of the way you cannot see what you are aiming at.
   const [showPanels, setShowPanels] = useState(true)
+  // An entrance plays once per page load, so tuning one is impossible without a
+  // way to watch it again. Bumping this re-runs it.
+  const [replayToken, setReplayToken] = useState(0)
 
   const set = useCallback(<K extends keyof EarthConfig>(key: K, value: EarthConfig[K]) => {
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -132,6 +136,7 @@ export default function Tuner({
     // <body> in the layout, which paints below negative z-index children.
     <main className="relative min-h-screen overflow-hidden text-white">
       <EarthBackground config={values} />
+      <SiteImage config={values} replayToken={replayToken} />
       <SiteText config={values} />
 
       <button
@@ -183,6 +188,17 @@ export default function Tuner({
               )}
             </p>
           </header>
+
+          {tab === 'Effects' && (
+            <div className="border-b border-white/10 px-4 py-3">
+              <button
+                onClick={() => setReplayToken((n) => n + 1)}
+                className="w-full rounded border border-white/20 px-3 py-2 text-xs text-white/80 transition-colors hover:bg-white/10"
+              >
+                ▶ Replay entrance
+              </button>
+            </div>
+          )}
 
           {GROUPS[tab].map((group) => (
             <section key={group} className="border-b border-white/10 px-4 py-3 last:border-0">
@@ -423,6 +439,10 @@ function Control({
     )
   }
 
+  if (param.kind === 'image') {
+    return <ImageControl param={param} value={value as string} onChange={onChange} />
+  }
+
   if (param.kind === 'text') {
     const text = value as string
     const shared = {
@@ -469,6 +489,78 @@ function Control({
         onChange={(e) => onChange(param.key, Number(e.target.value) as never)}
         className="mt-1.5 w-full accent-white"
       />
+      {param.hint && <p className="mt-1 text-xs leading-snug text-white/35">{param.hint}</p>}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------ image control */
+
+function ImageControl({
+  param,
+  value,
+  onChange,
+}: {
+  param: Extract<ParamDef, { kind: 'image' }>
+  value: string
+  onChange: <K extends keyof EarthConfig>(key: K, v: EarthConfig[K]) => void
+}) {
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function upload(file: File) {
+    setUploading(true)
+    setError(null)
+    const body = new FormData()
+    body.append('file', file)
+    const res = await fetch('/api/upload', { method: 'POST', body })
+    const data = await res.json().catch(() => ({}))
+    setUploading(false)
+    if (!res.ok) return setError(data.error ?? 'Upload failed.')
+    onChange(param.key, data.url as never)
+  }
+
+  return (
+    <div>
+      <label className="text-sm" htmlFor={param.key}>
+        {param.label}
+      </label>
+      <input
+        id={param.key}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(param.key, e.target.value.slice(0, param.maxLength) as never)}
+        placeholder={param.placeholder}
+        className="mt-1.5 w-full rounded border border-white/15 bg-black/50 px-2 py-1.5 text-sm outline-none placeholder:text-white/25 focus:border-white/40"
+      />
+
+      <div className="mt-2 flex items-center gap-2">
+        <label className="cursor-pointer rounded border border-white/15 px-2 py-1 text-xs text-white/70 transition-colors hover:bg-white/10">
+          {uploading ? 'Uploading…' : 'Upload'}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              // Reset so choosing the same file twice still fires a change.
+              e.target.value = ''
+              if (file) void upload(file)
+            }}
+          />
+        </label>
+        {value && (
+          <button
+            onClick={() => onChange(param.key, '' as never)}
+            className="text-xs text-white/35 transition-colors hover:text-red-400"
+          >
+            clear
+          </button>
+        )}
+      </div>
+
+      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
       {param.hint && <p className="mt-1 text-xs leading-snug text-white/35">{param.hint}</p>}
     </div>
   )
